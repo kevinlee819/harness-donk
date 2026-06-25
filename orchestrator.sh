@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 执行平面 dumb loop — MVP 单 worker、串行、--once 单跑一轮
+# 执行平面 dumb loop — 阶段二 iteration 2：含 BLOCKED 流 + 预算闸
 # 见 docs/interfaces.md §3
 #
 # bash 只管"调命令"；DB 操作走 python -m harness.cli.db_cli。
@@ -15,6 +15,7 @@ export HARNESS_HOME
 source "$HARNESS_HOME/lib/python_env.sh"
 source "$HARNESS_HOME/lib/atomic_write.sh"
 source "$HARNESS_HOME/lib/notify.sh"
+source "$HARNESS_HOME/lib/budget.sh"
 
 _db() { "$HARNESS_PYTHON" -m harness.cli.db_cli "$@"; }
 
@@ -44,7 +45,9 @@ export HARNESS_DB="$PROJECT_DIR/.harness/harness.db"
 
 WORKTREE_BASE="$(dirname "$PROJECT_DIR")/.worktrees/$PROJECT_NAME"
 LOG_DIR="$PROJECT_DIR/.harness/logs/raw"
-mkdir -p "$WORKTREE_BASE" "$LOG_DIR"
+INBOX_DIR="$PROJECT_DIR/.harness/inbox"
+INBOX_PROCESSED="$INBOX_DIR/processed"
+mkdir -p "$WORKTREE_BASE" "$LOG_DIR" "$INBOX_DIR" "$INBOX_PROCESSED"
 
 _log() { printf '[orchestrator %s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 
@@ -61,54 +64,62 @@ _write_status() {
   atomic_write_json "$path" "$json"
 }
 
-run_task() {
-  local task_id="$1" spec_path="$2"
-  local worker_id="w1"
-  local branch="harness/$task_id"
-  local worktree="$WORKTREE_BASE/$task_id"
+_worker_dir() {
+  # echo absolute path of worker dir for a given worker_id
+  echo "$PROJECT_DIR/.harness/workers/$1"
+}
 
-  _log "claim $task_id ($spec_path)"
+_check_blocking() {
+  # _check_blocking <worker_id>  → 0 if guidance.json exists with blocking=true
+  local g; g="$(_worker_dir "$1")/guidance.json"
+  [[ ! -f "$g" ]] && return 1
+  local blk; blk=$(jq -r '.blocking // false' "$g" 2>/dev/null)
+  [[ "$blk" == "true" ]]
+}
 
-  if [[ -d "$worktree" ]]; then
-    _log "worktree exists, reusing: $worktree"
-  else
-    git -C "$PROJECT_DIR" worktree add -b "$branch" "$worktree" 2>&1 | sed 's/^/  git: /' >&2 \
-      || { _log "git worktree add failed"; _db transition "$task_id" failed "worktree_add_failed"; return 1; }
+_handle_blocked() {
+  # _handle_blocked <task_id> <worker_id> <session_id> <branch>
+  local tid="$1" wid="$2" sid="$3" branch="$4"
+  local g; g="$(_worker_dir "$wid")/guidance.json"
+  local question="" context=""
+  if [[ -f "$g" ]]; then
+    question=$(jq -r '.question // ""' "$g")
+    context=$(jq -r '.context // ""' "$g")
   fi
-  _db set-branch "$task_id" "$branch"
-  _db transition "$task_id" working "first_dispatch"
-  _write_status "$worker_id" "$task_id" working "$branch" "starting" ""
+  _db transition "$tid" blocked "needs_decision"
+  _write_status "$wid" "$tid" working "$branch" "awaiting answer" "$sid"
+  notify needs_decision "$tid" \
+    "$(jq -nc --arg q "$question" --arg c "$context" --arg w "$wid" \
+       '{question:$q, context:$c, worker_id:$w}')" >/dev/null
+  _log "task $tid BLOCKED — awaiting inbox/$tid.answer"
+}
 
-  local spec_full="$PROJECT_DIR/$spec_path"
-  if [[ ! -f "$spec_full" ]]; then
-    _log "spec not found: $spec_full"
-    _db transition "$task_id" failed "spec_not_found"
-    return 1
-  fi
-  local prompt_file="$worktree/.harness-prompt.txt"
-  {
-    echo "=== TASK SPEC ==="
-    cat "$spec_full"
-    echo
-    echo "=== INSTRUCTIONS ==="
-    echo "请基于上述 spec 在当前目录完成任务。完成后必须 git add & git commit。"
-    echo "禁止 push、merge 主分支，禁止离开本工作目录。"
-  } > "$prompt_file"
+# _drive_task: 跑「adapter → (guidance? blocked) → gate → retry/merge」循环。
+# 调用前需保证 worktree 已存在、status.json 已写、tasks.status='working'。
+#
+# 入参：task_id worker_id branch worktree prompt_file [initial_sid]
+# 返回：0=merged  1=failed  2=blocked
+_drive_task() {
+  local task_id="$1" worker_id="$2" branch="$3" worktree="$4" prompt_file="$5"
+  local sid="${6:-}"
+  local retries; retries=$(_db get-retries "$task_id")
 
-  local retries=0 sid=""
   while :; do
-    _log "call claude adapter (retry $retries)"
+    _log "call claude adapter (task=$task_id retries=$retries)"
     local resp
+    local worker_dir; worker_dir=$(_worker_dir "$worker_id")
     if [[ $MOCK -eq 1 ]]; then
       resp=$(HARNESS_MOCK_ADAPTER=1 \
         ADAPTER_TASK_FILE="$prompt_file" ADAPTER_WORKTREE="$worktree" \
         ADAPTER_SESSION_ID="$sid" ADAPTER_LOG_DIR="$LOG_DIR" \
         ADAPTER_TASK_ID="$task_id" ADAPTER_WORKER_ID="$worker_id" \
+        ADAPTER_WORKER_DIR="$worker_dir" \
         bash "$HARNESS_HOME/adapters/claude.sh") || resp='{"ok":false,"error":"adapter_failed"}'
     else
       resp=$(ADAPTER_TASK_FILE="$prompt_file" ADAPTER_WORKTREE="$worktree" \
         ADAPTER_SESSION_ID="$sid" ADAPTER_LOG_DIR="$LOG_DIR" \
         ADAPTER_TASK_ID="$task_id" ADAPTER_WORKER_ID="$worker_id" \
+        ADAPTER_WORKER_DIR="$worker_dir" \
         ADAPTER_MODEL="$MODEL" \
         bash "$HARNESS_HOME/adapters/claude.sh") || resp='{"ok":false,"error":"adapter_failed"}'
     fi
@@ -137,6 +148,12 @@ run_task() {
       fi
       retries=$((retries+1)); _db inc-retries "$task_id"
       continue
+    fi
+
+    # 阶段二：adapter 调用成功后，先看 worker 是否写了 blocking guidance
+    if _check_blocking "$worker_id"; then
+      _handle_blocked "$task_id" "$worker_id" "$sid" "$branch"
+      return 2
     fi
 
     _db transition "$task_id" gating ""
@@ -173,6 +190,7 @@ run_task() {
     _db transition "$task_id" working "regating"
   done
 
+  # 合并阶段
   _db transition "$task_id" gating "merging"
   local main_branch
   main_branch=$(git -C "$PROJECT_DIR" symbolic-ref --short HEAD)
@@ -184,8 +202,8 @@ run_task() {
     notify task_completed "$task_id" "$(jq -nc --arg b "$branch" '{branch:$b}')" >/dev/null
     git -C "$PROJECT_DIR" worktree remove --force "$worktree" >/dev/null 2>&1 || true
     git -C "$PROJECT_DIR" branch -D "$branch" >/dev/null 2>&1 || true
-    # 合并节点自动备份（轻量、间隔自然）
     "$HARNESS_HOME/bin/harness" backup >/dev/null 2>&1 || true
+    return 0
   else
     _log "merge failed"
     _db transition "$task_id" failed "merge_conflict"
@@ -194,16 +212,142 @@ run_task() {
   fi
 }
 
-# main
+run_task() {
+  local task_id="$1" spec_path="$2"
+  local worker_id="w1"
+  local branch="harness/$task_id"
+  local worktree="$WORKTREE_BASE/$task_id"
+
+  _log "claim $task_id ($spec_path)"
+
+  if [[ -d "$worktree" ]]; then
+    _log "worktree exists, reusing: $worktree"
+  else
+    git -C "$PROJECT_DIR" worktree add -b "$branch" "$worktree" 2>&1 | sed 's/^/  git: /' >&2 \
+      || { _log "git worktree add failed"; _db transition "$task_id" failed "worktree_add_failed"; return 1; }
+  fi
+  _db set-branch "$task_id" "$branch"
+  _db transition "$task_id" working "first_dispatch"
+  _write_status "$worker_id" "$task_id" working "$branch" "starting" ""
+
+  local spec_full="$PROJECT_DIR/$spec_path"
+  if [[ ! -f "$spec_full" ]]; then
+    _log "spec not found: $spec_full"
+    _db transition "$task_id" failed "spec_not_found"
+    return 1
+  fi
+  local prompt_file="$worktree/.harness-prompt.txt"
+  {
+    echo "=== TASK SPEC ==="
+    cat "$spec_full"
+    echo
+    echo "=== INSTRUCTIONS ==="
+    echo "请基于上述 spec 在当前目录完成任务。完成后必须 git add & git commit。"
+    echo "禁止 push、merge 主分支，禁止离开本工作目录。"
+  } > "$prompt_file"
+
+  _drive_task "$task_id" "$worker_id" "$branch" "$worktree" "$prompt_file" ""
+}
+
+resume_blocked_task() {
+  # 从 BLOCKED 恢复：读 inbox/<tid>.answer，拼 resume prompt，调 _drive_task
+  local task_id="$1"
+  local answer_file="$INBOX_DIR/${task_id}.answer"
+  [[ ! -f "$answer_file" ]] && return 0
+
+  local row; row=$(_db query-status "$task_id")
+  [[ -z "$row" ]] && { _log "resume: no such task $task_id"; return 1; }
+  local id stat wid branch retries reds prio created
+  IFS=$'\t' read -r id stat wid branch retries reds prio created <<<"$row"
+  [[ "$stat" != "blocked" ]] && { _log "resume: $task_id not blocked (status=$stat)"; return 1; }
+
+  local worktree="$WORKTREE_BASE/$task_id"
+  [[ ! -d "$worktree" ]] && { _log "resume: worktree gone for $task_id"; _db transition "$task_id" failed "worktree_lost"; return 1; }
+
+  local sid; sid=$(_db get-session "$task_id" claude)
+
+  # 解析 answer：JSON 优先取 .answer，否则当纯文本
+  local answer
+  if jq -e . "$answer_file" >/dev/null 2>&1; then
+    answer=$(jq -r '.answer // ""' "$answer_file")
+  else
+    answer=$(cat "$answer_file")
+  fi
+  [[ -z "$answer" ]] && { _log "resume: empty answer for $task_id"; return 1; }
+
+  # 拿原问题作上下文
+  local guidance; guidance="$(_worker_dir "$wid")/guidance.json"
+  local question=""
+  [[ -f "$guidance" ]] && question=$(jq -r '.question // ""' "$guidance")
+
+  local prompt_file="$worktree/.harness-prompt.txt"
+  {
+    echo "=== RESUME — 用户/协调者已答复 ==="
+    [[ -n "$question" ]] && echo "上一次提问：$question"
+    echo "决策：$answer"
+    echo
+    echo "请基于此决策继续完成任务。完成后必须 git add & git commit。"
+    echo "禁止 push、merge 主分支，禁止离开本工作目录。"
+  } > "$prompt_file"
+
+  # 清掉 guidance.json 防止下一轮再次触发 BLOCKED；归档 answer
+  [[ -f "$guidance" ]] && rm -f "$guidance"
+  mv "$answer_file" "$INBOX_PROCESSED/${task_id}.answer.$(date -u +%Y%m%dT%H%M%SZ)"
+
+  _db transition "$task_id" working "answered"
+  _write_status "$wid" "$task_id" working "$branch" "resumed" "$sid"
+  _log "resume $task_id with answer"
+  _drive_task "$task_id" "$wid" "$branch" "$worktree" "$prompt_file" "$sid"
+}
+
+_scan_resume_blocked() {
+  # 扫所有 BLOCKED 任务，找有 answer 的，逐个恢复
+  local rows; rows=$(_db query-by-status blocked 2>/dev/null)
+  [[ -z "$rows" ]] && return 0
+  local tid stat wid retries prio created
+  while IFS=$'\t' read -r tid stat wid retries prio created; do
+    [[ -z "$tid" ]] && continue
+    [[ -f "$INBOX_DIR/${tid}.answer" ]] || continue
+    resume_blocked_task "$tid" || _log "resume $tid failed"
+  done <<< "$rows"
+}
+
+_budget_guard() {
+  # 返回 0：可派；1：超限（已 notify）。
+  if budget_check; then return 0; fi
+  local today; today=$(date -u +%Y-%m-%d)
+  local marker="$PROJECT_DIR/.harness/.budget-exceeded-${today}"
+  if [[ ! -f "$marker" ]]; then
+    local cost; cost=$(budget_today)
+    local limit; limit=$(_budget_daily_limit)
+    notify budget_exceeded "-" \
+      "$(jq -nc --arg c "$cost" --arg l "$limit" --arg d "$today" \
+         '{cost_usd:($c|tonumber), limit_usd:($l|tonumber), date:$d}')" >/dev/null
+    touch "$marker"
+    _log "budget exceeded: \$$cost > \$$limit (kill switch engaged)"
+  fi
+  return 1
+}
+
+# main loop
 while :; do
-  row=$(_db claim w1)
+  # 先 resume：避免老任务卡死
+  _scan_resume_blocked
+
+  # 预算闸：超限就停止新派发
+  if _budget_guard; then
+    row=$(_db claim w1)
+  else
+    row=""
+  fi
+
   if [[ -z "$row" ]]; then
-    _log "queue empty"
+    _log "queue empty (or budget locked)"
     [[ $ONCE -eq 1 ]] && exit 0
     sleep 5; continue
   fi
   task_id="${row%%|*}"
   spec_path="${row#*|}"
-  run_task "$task_id" "$spec_path" || _log "task $task_id failed"
+  run_task "$task_id" "$spec_path" || _log "task $task_id ended non-merged"
   [[ $ONCE -eq 1 ]] && exit 0
 done

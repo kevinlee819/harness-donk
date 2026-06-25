@@ -61,5 +61,12 @@ notify() {
       task_id:(if $tid=="-" or $tid=="" then null else $tid end),
       payload:$payload}' > "$fname.tmp" && mv "$fname.tmp" "$fname"
 
+  # fire-and-forget notification hook（系统通知 / 用户自定义出口）
+  local nhook="${HARNESS_HOME:-}/hooks/notification.sh"
+  if [[ -x "$nhook" ]]; then
+    "$nhook" "$etype" "$tid" "$fname" >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+  fi
+
   echo "$eid"
 }

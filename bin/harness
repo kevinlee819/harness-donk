@@ -126,6 +126,16 @@ cmd_backup() {
   local out="$out_dir/harness-$ts.db"
   # sqlite3 .backup 是在线热备份（持锁短，WAL 仍可读），比直接 cp 安全
   sqlite3 "$db_path" ".backup '$out'" || { echo "backup failed" >&2; exit 2; }
+
+  # 保留策略：删除 N 天前的备份（默认 7 天，可通过 HARNESS_BACKUP_RETAIN_DAYS 覆盖）。
+  # 至少保留最近 1 份，防 retain_days 过小把全部干掉。
+  local retain="${HARNESS_BACKUP_RETAIN_DAYS:-7}"
+  if [[ "$retain" =~ ^[0-9]+$ ]] && [[ "$retain" -gt 0 ]]; then
+    local recent; recent=$(ls -1t "$out_dir"/harness-*.db 2>/dev/null | head -1)
+    find "$out_dir" -name 'harness-*.db' -type f -mtime "+$retain" \
+      ! -path "$recent" -delete 2>/dev/null || true
+  fi
+
   echo "$out"
 }
 

@@ -133,14 +133,19 @@
 - [x] db.py `event_write` / `event_query_pending` / `event_mark_delivered` / `session_touch`
 - [x] 测试：80+ cases 全绿（+4 db events / +5 notify / +1 history flag / +1 events 集成）
 
-### Iteration 2（待做）
-- [ ] guidance 升级：worker 写 `guidance.json {blocking:true}` → BLOCKED → `needs_decision` 事件
-- [ ] inbox 答复：`<task_id>.answer` 出现 → BLOCKED → WORKING + adapter `--resume`
-- [ ] 死 worker 检测：扫描器 + `sessions.last_seen` 超阈值 + `redispatches++` 封顶 2
-- [ ] `lib/budget.sh` kill switch — 超限停止派发 + `budget_exceeded` 事件
-- [ ] `hooks/notification.sh` — 把待决策事件以系统通知方式上抛
-- [ ] orchestrator 周期扫描 events 注入协调者会话（待协调者会话存在）
-- [ ] `harness backup` 增加保留策略（默认保留 7 天）
+### Iteration 2（2026-06-25 大部完成）
+- [x] guidance 升级：worker 写 `guidance.json {blocking:true}` → BLOCKED → `needs_decision` 事件
+- [x] inbox 答复：`<task_id>.answer` 出现 → BLOCKED → WORKING + adapter `--resume`（保留 session_id；归档 answer 到 inbox/processed/）
+- [x] `lib/budget.sh` kill switch — 超限停止派发 + `budget_exceeded` 事件（实现在 orchestrator `_budget_guard`，按天去重 marker）
+- [x] `hooks/notification.sh` — 待决策/失败/超限事件触发；macOS osascript 桌面通知 + 永远落 `.harness/logs/notify.log`
+- [x] `harness backup` 保留策略（默认 7 天，可 `HARNESS_BACKUP_RETAIN_DAYS` 覆盖）
+- [x] orchestrator 主循环顶部：先 `_scan_resume_blocked`，再预算闸，再 claim
+- [x] mock adapter 加 `HARNESS_MOCK_BLOCK=1` 钩子用于测试 BLOCKED 流
+- [x] 测试：92+ cases / 13 files 全绿 (+2 e2e blocked-resume / +4 budget / +3 backup / +3 notification hook)
+
+### Iteration 2（仍待）
+- [ ] 死 worker 检测：扫描器 + `sessions.last_seen` 超阈值 + `redispatches++` 封顶 2（需要 worker 心跳机制；现在 adapter 是单 shot 调用，没自然心跳点）
+- [ ] orchestrator 周期扫描 events 注入协调者会话（待协调者会话有可注入接口；tmux send-keys 不可靠，stage 3 再做）
 - [ ] 验收：8 任务 / 8 小时离场无人值守，≥ 5 MERGED
 - [ ] 验收：`kill -9` orchestrator + workers 后重启续跑，无半截中间态
 - [ ] 验收：模拟 timeout → 自动重派一次 → 失败 → FAILED 上抛

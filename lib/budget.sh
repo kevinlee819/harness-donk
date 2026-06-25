@@ -33,8 +33,7 @@ budget_check() {
   "$HARNESS_PYTHON" -c "import sys; sys.exit(0 if float('$used') < float('$limit') else 1)"
 }
 
-# 阶段一占位：阶段二补真 kill switch。
-budget_kill_switch() {
-  echo "budget_kill_switch: not implemented (stage 2)" >&2
-  return 0
-}
+# Kill switch 由 orchestrator._budget_guard 实现（loop 顶部）：
+#   - budget_check 失败 → notify budget_exceeded（按天去重） → 跳过 claim
+# 不在这里写阻塞循环，因为这里没有 PROJECT_DIR 上下文。
+# 暴露的工具：上面的 _budget_daily_limit / budget_today / budget_check。

@@ -33,6 +33,7 @@ ADAPTER_TIMEOUT="${ADAPTER_TIMEOUT:-900}"
 ADAPTER_LOG_DIR="${ADAPTER_LOG_DIR:-}"
 ADAPTER_TASK_ID="${ADAPTER_TASK_ID:-}"
 ADAPTER_WORKER_ID="${ADAPTER_WORKER_ID:-}"
+ADAPTER_WORKER_DIR="${ADAPTER_WORKER_DIR:-}"
 ADAPTER_MODEL="${ADAPTER_MODEL:-}"
 
 [[ ! -f "$ADAPTER_TASK_FILE" ]] && { echo "task file not found: $ADAPTER_TASK_FILE" >&2; exit 1; }
@@ -71,12 +72,30 @@ _log_raw() {
 # Mock mode：不调真 CLI，只 touch 一个文件后返回成功
 if [[ -n "${HARNESS_MOCK_ADAPTER:-}" ]]; then
   prompt=$(cat "$ADAPTER_TASK_FILE")
-  # Mock 行为：在 worktree 下创建 HELLO.txt 包含 prompt 摘要
+  fake_sid="${ADAPTER_SESSION_ID:-00000000-0000-0000-0000-000000000001}"
+
+  # 测试钩子：HARNESS_MOCK_BLOCK=1 让 mock 写一份 blocking guidance.json，
+  # 模拟 worker 需人工决策。要求 ADAPTER_WORKER_DIR 已传入。
+  if [[ -n "${HARNESS_MOCK_BLOCK:-}" ]]; then
+    : "${ADAPTER_WORKER_DIR:?ADAPTER_WORKER_DIR required for HARNESS_MOCK_BLOCK}"
+    mkdir -p "$ADAPTER_WORKER_DIR"
+    jq -n --arg tid "$ADAPTER_TASK_ID" \
+          --arg q "${HARNESS_MOCK_BLOCK_QUESTION:-mock question: A or B?}" \
+          --arg ctx "${HARNESS_MOCK_BLOCK_CONTEXT:-mock-block test context}" \
+          --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      '{schema_version:1, blocking:true, task_id:$tid, question:$q, context:$ctx, created:$now}' \
+      > "$ADAPTER_WORKER_DIR/guidance.json.tmp" \
+      && mv "$ADAPTER_WORKER_DIR/guidance.json.tmp" "$ADAPTER_WORKER_DIR/guidance.json"
+    jq -nc --arg sid "$fake_sid" \
+      '{ok:true, session_id:$sid, result:"mock blocked", cost_usd:0, num_turns:1, files_changed:0, error:null}'
+    exit 0
+  fi
+
+  # 常规 mock 行为：在 worktree 下创建 HELLO.txt 包含 prompt 摘要
   echo "mock-adapter ran: $(echo "$prompt" | head -c 100)" > HELLO.txt
   git add HELLO.txt >/dev/null 2>&1 || true
   git -c user.email=mock@harness -c user.name=mock commit -m "mock: $(echo "$prompt" | head -c 50)" >/dev/null 2>&1 || true
   changed=$(_count_files_changed)
-  fake_sid="${ADAPTER_SESSION_ID:-00000000-0000-0000-0000-000000000001}"
   jq -nc --arg sid "$fake_sid" --argjson fc "${changed:-0}" \
     '{ok:true, session_id:$sid, result:"mock done", cost_usd:0, num_turns:1, files_changed:$fc, error:null}'
   exit 0
