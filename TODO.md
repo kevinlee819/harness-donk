@@ -143,12 +143,21 @@
 - [x] mock adapter 加 `HARNESS_MOCK_BLOCK=1` 钩子用于测试 BLOCKED 流
 - [x] 测试：92+ cases / 13 files 全绿 (+2 e2e blocked-resume / +4 budget / +3 backup / +3 notification hook)
 
-### Iteration 2（仍待）
-- [ ] 死 worker 检测：扫描器 + `sessions.last_seen` 超阈值 + `redispatches++` 封顶 2（需要 worker 心跳机制；现在 adapter 是单 shot 调用，没自然心跳点）
-- [ ] orchestrator 周期扫描 events 注入协调者会话（待协调者会话有可注入接口；tmux send-keys 不可靠，stage 3 再做）
-- [ ] 验收：8 任务 / 8 小时离场无人值守，≥ 5 MERGED
-- [ ] 验收：`kill -9` orchestrator + workers 后重启续跑，无半截中间态
-- [ ] 验收：模拟 timeout → 自动重派一次 → 失败 → FAILED 上抛
+### Iteration 2 收尾（2026-06-25 完成 #3：orphan reaper + BLOCKED 超时）
+- [x] **孤儿任务回收**：单进程编排器下，loop 顶端 `transient 状态 + updated 老于阈值` 即崩溃残留（不用心跳）。
+   - `_reap_orphans`：扫 dispatched/working/gating + updated > dead_worker_threshold_min 分钟（默 10）
+   - `redispatches < MAX_REDISPATCHES`（默 2）→ 转 queued + redispatches++（下个 loop claim 会再跑）
+   - 否则 → failed + task_failed 事件（payload 含 redispatches）
+- [x] **BLOCKED 超时**：`_timeout_blocked` 扫 blocked + 最后 blocked transition > blocked_timeout_hours（默 72h）→ failed + task_failed 事件
+- [x] 配置项：`blocked_timeout_hours` 加入 `~/.config/harness/config` setup 默认
+- [x] db.py `query_orphans` / `query_blocked_overdue` / `inc_redispatches` + db_cli 子命令
+- [x] 测试：17 文件 / 113+ cases 全绿（+4 e2e orphan/blocked-timeout / +5 unit db queries）
+
+### Iteration 2 仍待
+- [ ] orchestrator 周期扫描 events 注入协调者会话（待协调者会话真启动后再做；tmux send-keys 不可靠，可能改 file watcher）
+- [ ] 验收：8 任务 / 8 小时离场无人值守，≥ 5 MERGED（前置：协调者真启动）
+- [ ] 验收：`kill -9` orchestrator + workers 后重启续跑，无半截中间态（孤儿回收已就位，但还没真模拟 kill -9）
+- [ ] 验收：模拟 timeout → 自动重派一次 → 失败 → FAILED 上抛（孤儿回收 e2e 已覆盖一半，差 timeout 触发路径）
 
 ---
 

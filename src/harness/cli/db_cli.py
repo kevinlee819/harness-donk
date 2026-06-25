@@ -164,6 +164,25 @@ def cmd_session_touch(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_inc_redispatches(args: argparse.Namespace) -> int:
+    db.inc_redispatches(args.task_id)
+    return 0
+
+
+def cmd_query_orphans(args: argparse.Namespace) -> int:
+    rows = db.query_orphans(int(args.threshold_minutes))
+    for r in rows:
+        print(_tsv_join(r))
+    return 0
+
+
+def cmd_query_blocked_overdue(args: argparse.Namespace) -> int:
+    rows = db.query_blocked_overdue(int(args.threshold_hours))
+    for r in rows:
+        print(_tsv_join(r))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="harness-db")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -251,6 +270,18 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("task_id")
     s.add_argument("backend")
     s.set_defaults(func=cmd_session_touch)
+
+    s = sub.add_parser("inc-redispatches")
+    s.add_argument("task_id")
+    s.set_defaults(func=cmd_inc_redispatches)
+
+    s = sub.add_parser("query-orphans")
+    s.add_argument("threshold_minutes")
+    s.set_defaults(func=cmd_query_orphans)
+
+    s = sub.add_parser("query-blocked-overdue")
+    s.add_argument("threshold_hours")
+    s.set_defaults(func=cmd_query_blocked_overdue)
 
     return p
 

@@ -183,6 +183,90 @@ class DbTestCase(unittest.TestCase):
             ).fetchone()[0]
         self.assertNotEqual(before, after)
 
+    # ── orphan reaper / blocked timeout ──
+    def _fossilize(self, tid: str, status: str, days_ago: int = 30) -> None:
+        """Set status + force `updated` to ages-ago, for query_orphans tests."""
+        import sqlite3
+        with sqlite3.connect(str(self.db_path)) as c:
+            c.execute(
+                f"UPDATE tasks SET status=?, updated=datetime('now','-{days_ago} days') WHERE id=?",
+                (status, tid),
+            )
+
+    def test_query_orphans_finds_transient_stale(self):
+        db.add_task("T-OLD-W", "a.md")
+        self._fossilize("T-OLD-W", "working")
+        db.add_task("T-OLD-G", "b.md")
+        self._fossilize("T-OLD-G", "gating")
+        db.add_task("T-OLD-D", "c.md")
+        self._fossilize("T-OLD-D", "dispatched")
+        rows = db.query_orphans(10)
+        ids = {r[0] for r in rows}
+        self.assertEqual({"T-OLD-W", "T-OLD-G", "T-OLD-D"}, ids)
+
+    def test_query_orphans_excludes_terminal_states(self):
+        db.add_task("T-MRG", "a.md")
+        self._fossilize("T-MRG", "merged")
+        db.add_task("T-FAIL", "b.md")
+        self._fossilize("T-FAIL", "failed")
+        db.add_task("T-BLK", "c.md")
+        self._fossilize("T-BLK", "blocked")
+        rows = db.query_orphans(10)
+        self.assertEqual([], rows, "merged/failed/blocked not orphans")
+
+    def test_query_orphans_excludes_recent(self):
+        db.add_task("T-FRESH", "a.md")
+        # status='working' but updated is current time (transition sets it)
+        db.transition("T-FRESH", "working", "test")
+        rows = db.query_orphans(10)
+        self.assertEqual([], rows, "recent transient not orphans")
+
+    def test_inc_redispatches(self):
+        db.add_task("T-RD", "a.md")
+        db.inc_redispatches("T-RD")
+        db.inc_redispatches("T-RD")
+        import sqlite3
+        with sqlite3.connect(str(self.db_path)) as c:
+            (n,) = c.execute(
+                "SELECT redispatches FROM tasks WHERE id=?", ("T-RD",)
+            ).fetchone()
+        self.assertEqual(2, n)
+
+    def test_query_blocked_overdue(self):
+        import sqlite3
+        db.add_task("T-OLD-BLK", "a.md")
+        db.add_task("T-NEW-BLK", "b.md")
+        with sqlite3.connect(str(self.db_path)) as c:
+            c.execute("UPDATE tasks SET status='blocked' WHERE id IN ('T-OLD-BLK','T-NEW-BLK')")
+            c.execute(
+                "INSERT INTO transitions(task_id, from_state, to_state, reason, ts) "
+                "VALUES('T-OLD-BLK','working','blocked','needs_decision',datetime('now','-100 hours'))"
+            )
+            c.execute(
+                "INSERT INTO transitions(task_id, from_state, to_state, reason, ts) "
+                "VALUES('T-NEW-BLK','working','blocked','needs_decision',datetime('now','-1 hours'))"
+            )
+        rows = db.query_blocked_overdue(72)
+        ids = [r[0] for r in rows]
+        self.assertEqual(["T-OLD-BLK"], ids, "only T-OLD-BLK is overdue")
+
+    def test_query_blocked_overdue_excludes_non_blocked(self):
+        # Tasks that WERE blocked but are now merged shouldn't show up.
+        import sqlite3
+        db.add_task("T-EX", "a.md")
+        with sqlite3.connect(str(self.db_path)) as c:
+            c.execute(
+                "INSERT INTO transitions(task_id, from_state, to_state, reason, ts) "
+                "VALUES('T-EX','working','blocked','test',datetime('now','-100 hours'))"
+            )
+            c.execute(
+                "INSERT INTO transitions(task_id, from_state, to_state, reason, ts) "
+                "VALUES('T-EX','blocked','merged','ok',datetime('now','-50 hours'))"
+            )
+            c.execute("UPDATE tasks SET status='merged' WHERE id='T-EX'")
+        rows = db.query_blocked_overdue(72)
+        self.assertEqual([], rows, "current status must be blocked")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

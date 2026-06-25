@@ -23,6 +23,7 @@ PROJECT_DIR="$(pwd)"
 ONCE=0
 MOCK=0
 MAX_RETRIES=3
+MAX_REDISPATCHES="${HARNESS_MAX_REDISPATCHES:-2}"
 MODEL="${HARNESS_MODEL:-}"
 BACKEND="${HARNESS_BACKEND:-claude}"
 
@@ -318,6 +319,58 @@ _scan_resume_blocked() {
   done <<< "$rows"
 }
 
+# ── 全局配置读取（小工具，不引依赖）─────────────────
+_conf_value() {
+  # _conf_value <key> <default>
+  local key="$1" def="$2"
+  local conf="${HARNESS_CONFIG_DIR:-$HOME/.config/harness}/config"
+  local v=""
+  if [[ -f "$conf" ]]; then
+    v=$(awk -F= -v k="$key" '$0 ~ "^"k"[[:space:]]*=" {gsub(/[[:space:]]/,"",$2); print $2; exit}' "$conf")
+  fi
+  echo "${v:-$def}"
+}
+
+_reap_orphans() {
+  # 扫描 transient 状态的孤儿任务（dispatched/working/gating + updated 过老）
+  # 单进程编排器在 loop 顶端时，本进程不可能有 in-flight 任务 → 全是上次崩溃留下的。
+  # 重派封顶 redispatches=$MAX_REDISPATCHES，超过则 FAILED。
+  local thresh; thresh=$(_conf_value dead_worker_threshold_min 10)
+  local rows; rows=$(_db query-orphans "$thresh" 2>/dev/null)
+  [[ -z "$rows" ]] && return 0
+  local tid status retries reds updated
+  while IFS=$'\t' read -r tid status retries reds updated; do
+    [[ -z "$tid" ]] && continue
+    if (( reds < MAX_REDISPATCHES )); then
+      _log "orphan reap: $tid (status=$status updated=$updated reds=$reds) → queued"
+      _db inc-redispatches "$tid"
+      _db transition "$tid" queued "orphan_redispatch"
+    else
+      _log "orphan reap: $tid (status=$status reds=$reds maxed) → failed"
+      _db transition "$tid" failed "orphan_max_redispatches"
+      notify task_failed "$tid" \
+        "$(jq -nc --arg r "orphan_max_redispatches" --argjson rd "$reds" \
+           '{reason:$r, redispatches:$rd}')" >/dev/null
+    fi
+  done <<< "$rows"
+}
+
+_timeout_blocked() {
+  # BLOCKED 任务卡过阈值（默认 72h）→ FAILED + task_failed 事件
+  local hrs; hrs=$(_conf_value blocked_timeout_hours 72)
+  local rows; rows=$(_db query-blocked-overdue "$hrs" 2>/dev/null)
+  [[ -z "$rows" ]] && return 0
+  local tid since
+  while IFS=$'\t' read -r tid since; do
+    [[ -z "$tid" ]] && continue
+    _log "BLOCKED timeout: $tid (blocked since $since) → failed"
+    _db transition "$tid" failed "blocked_timeout"
+    notify task_failed "$tid" \
+      "$(jq -nc --arg r "blocked_timeout" --arg s "$since" --arg h "$hrs" \
+         '{reason:$r, blocked_since:$s, threshold_hours:($h|tonumber)}')" >/dev/null
+  done <<< "$rows"
+}
+
 _budget_guard() {
   # 返回 0：可派；1：超限（已 notify）。
   if budget_check; then return 0; fi
@@ -337,7 +390,9 @@ _budget_guard() {
 
 # main loop
 while :; do
-  # 先 resume：避免老任务卡死
+  # 顶部清理顺序：先回收孤儿，再 BLOCKED 超时，再 resume 答复，最后预算 + claim
+  _reap_orphans
+  _timeout_blocked
   _scan_resume_blocked
 
   # 预算闸：超限就停止新派发

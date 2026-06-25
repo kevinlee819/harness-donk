@@ -150,6 +150,62 @@ def inc_retries(task_id: str) -> None:
         )
 
 
+def inc_redispatches(task_id: str) -> None:
+    """Used by orphan reaper when a task is redispatched after orchestrator crash."""
+    with _connect() as c:
+        c.execute(
+            "UPDATE tasks SET redispatches=redispatches+1, updated=? WHERE id=?",
+            (_now(), task_id),
+        )
+
+
+def query_orphans(threshold_minutes: int) -> list[tuple]:
+    """Tasks left in transient states with `updated` older than threshold.
+
+    Single-process orchestrator: at loop top, no task of ours is mid-flight
+    (run_task is synchronous). Anything still in dispatched/working/gating
+    is from a previous crashed run → reap.
+
+    Returns rows of (id, status, retries, redispatches, updated).
+    """
+    modifier = f"-{int(threshold_minutes)} minutes"
+    with _connect() as c:
+        rows = c.execute(
+            """
+            SELECT id, status, retries, redispatches, updated
+            FROM tasks
+            WHERE status IN ('dispatched','working','gating')
+              AND updated < datetime('now', ?)
+            ORDER BY priority, id
+            """,
+            (modifier,),
+        ).fetchall()
+    return rows
+
+
+def query_blocked_overdue(threshold_hours: int) -> list[tuple]:
+    """Tasks BLOCKED for longer than threshold_hours.
+
+    Returns rows of (id, last_blocked_ts).
+    """
+    modifier = f"-{int(threshold_hours)} hours"
+    with _connect() as c:
+        rows = c.execute(
+            """
+            SELECT t.id, MAX(tr.ts) AS blocked_since
+            FROM tasks t
+            JOIN transitions tr ON tr.task_id = t.id
+            WHERE t.status = 'blocked'
+              AND tr.to_state = 'blocked'
+            GROUP BY t.id
+            HAVING blocked_since < datetime('now', ?)
+            ORDER BY blocked_since
+            """,
+            (modifier,),
+        ).fetchall()
+    return rows
+
+
 def get_retries(task_id: str) -> int:
     with _connect() as c:
         row = c.execute(
