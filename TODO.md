@@ -170,10 +170,24 @@
 - [x] `harness doctor` 加 codex 真 echo 自检（不再仅检查 PATH 存在）
 - [x] 测试：15 files / 103+ cases 全绿（+5 codex adapter / +6 gate cross_review）
 
-### 后续
+### D1：真环境跨模型冒烟（2026-06-25 完成）
+- [x] 加 orchestrator `--backend` flag + `HARNESS_BACKEND` env；替换硬编码 claude（含 status.json / register-session / log-call / get-session）
+- [x] 集成测试：T-bsw（codex backend → CODEX.txt + calls.backend=codex）、T-defcl（默认 claude）、unknown backend fast fail
+- [x] codex 写 + claude 审完整闭环：T-retry（retry.py + test_retry.py）
+   - codex sonnet-?? 约 105s 完成 写 18+40 行；gate 测试 + cross_review 全绿；merge OK
+   - claude 沉默 approve 因 codex 写得干净（实测无 subtle bug）
+- [x] **关键验证**：手动注入 sleep-before-first-attempt bug → claude 24s reject 输出 3 条精准 issue：
+   - "每次循环开头都 sleep，导致首次尝试前也会 sleep(delay)..." 命中注入的 bug
+   - "sleep 次数从最多 max_attempts-1 改为 max_attempts，行为不一致"
+   - "docstring 退化降低契约清晰度"
+   - **原则六生成者-裁判分离首次真实落地**
+- [x] 修观测缺口：gate cross_review 调用现也落 `.harness/logs/raw/`（worktree 回收前抢救出来）
+
+### 阶段三剩余
 - [ ] `adapters/opencode.sh` — `opencode run` 路径（opencode 暂未安装，等用户需要再做）
-- [ ] 真环境跨模型冒烟：claude 写 + codex 审（含一个真有 subtle bug 的 diff 看能否被抓）
-- [ ] 验收：3 个 subtle bug diff 识别率 ≥ 2/3
+- [ ] 跨模型审查 calls 记账：review 调用没进 calls 表（gate.sh 不写 DB）→ 跨模型成本不可见。补 calls 表写入或单独 reviews 表
+- [ ] reviewer 选择从「单 backend」升级到 spec 级别（不同 task 不同 reviewer）
+- [ ] 验收：3 个 subtle bug diff 识别率 ≥ 2/3（当前 1/1 命中）
 - [ ] 验收：adapter 合同所有硬门槛满足（capability bitmap、串行锁竞争、超时）
 
 ---

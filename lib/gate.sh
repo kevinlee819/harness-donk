@@ -141,11 +141,18 @@ _run_cross_review() {
 
   # 调审查 backend；review 模式用 read-only sandbox（codex）/ 默认（claude）
   # mock 模式（测试用）：父进程已 export 即继承；不在命令前缀做条件 env（bash 不支持）
+  # 把 review 调用也落 raw log（worktree 合并后即丢；放到项目 .harness/logs/raw/）
+  local log_dir=""
+  if [[ -n "${HARNESS_TASK_ID:-}" ]] && [[ -n "${HARNESS_DB:-}" ]]; then
+    log_dir=$(dirname "$HARNESS_DB")/logs/raw
+    mkdir -p "$log_dir"
+  fi
   local start; start=$(python3 -c 'import time;print(int(time.time()*1000))')
   local resp; set +e
   resp=$(ADAPTER_TASK_FILE="$prompt_file" ADAPTER_WORKTREE="$WORKTREE" \
          ADAPTER_SANDBOX="read-only" ADAPTER_MAX_TURNS=4 \
-         ADAPTER_TASK_ID="${HARNESS_TASK_ID:-cross-review}" \
+         ADAPTER_TASK_ID="${HARNESS_TASK_ID:-cross-review}-review" \
+         ADAPTER_LOG_DIR="$log_dir" \
          bash "$adapter")
   local rc=$?
   set -e

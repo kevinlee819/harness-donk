@@ -24,6 +24,7 @@ ONCE=0
 MOCK=0
 MAX_RETRIES=3
 MODEL="${HARNESS_MODEL:-}"
+BACKEND="${HARNESS_BACKEND:-claude}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -32,9 +33,13 @@ while [[ $# -gt 0 ]]; do
     --mock) MOCK=1; shift ;;
     --max-retries) MAX_RETRIES="$2"; shift 2 ;;
     --model) MODEL="$2"; shift 2 ;;
+    --backend) BACKEND="$2"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
 done
+
+ADAPTER_SH="$HARNESS_HOME/adapters/${BACKEND}.sh"
+[[ ! -f "$ADAPTER_SH" ]] && { echo "unknown backend: $BACKEND (no $ADAPTER_SH)" >&2; exit 1; }
 
 cd "$PROJECT_DIR"
 PROJECT_DIR=$(pwd)
@@ -59,7 +64,8 @@ _write_status() {
   json=$(jq -nc --arg wid "$wid" --arg tid "$tid" --arg s "$stat" --arg b "$branch" \
                 --arg p "$progress" --arg sid "$sid" \
                 --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    '{schema_version:1, worker_id:$wid, backend:"claude", session_id:$sid, task_id:$tid,
+    --arg backend "$BACKEND" \
+    '{schema_version:1, worker_id:$wid, backend:$backend, session_id:$sid, task_id:$tid,
       status:$s, branch:$b, progress:$p, turns:0, files_changed:0, blockers:[], updated:$now}')
   atomic_write_json "$path" "$json"
 }
@@ -105,7 +111,7 @@ _drive_task() {
   local retries; retries=$(_db get-retries "$task_id")
 
   while :; do
-    _log "call claude adapter (task=$task_id retries=$retries)"
+    _log "call $BACKEND adapter (task=$task_id retries=$retries)"
     local resp
     local worker_dir; worker_dir=$(_worker_dir "$worker_id")
     if [[ $MOCK -eq 1 ]]; then
@@ -114,14 +120,14 @@ _drive_task() {
         ADAPTER_SESSION_ID="$sid" ADAPTER_LOG_DIR="$LOG_DIR" \
         ADAPTER_TASK_ID="$task_id" ADAPTER_WORKER_ID="$worker_id" \
         ADAPTER_WORKER_DIR="$worker_dir" \
-        bash "$HARNESS_HOME/adapters/claude.sh") || resp='{"ok":false,"error":"adapter_failed"}'
+        bash "$ADAPTER_SH") || resp='{"ok":false,"error":"adapter_failed"}'
     else
       resp=$(ADAPTER_TASK_FILE="$prompt_file" ADAPTER_WORKTREE="$worktree" \
         ADAPTER_SESSION_ID="$sid" ADAPTER_LOG_DIR="$LOG_DIR" \
         ADAPTER_TASK_ID="$task_id" ADAPTER_WORKER_ID="$worker_id" \
         ADAPTER_WORKER_DIR="$worker_dir" \
         ADAPTER_MODEL="$MODEL" \
-        bash "$HARNESS_HOME/adapters/claude.sh") || resp='{"ok":false,"error":"adapter_failed"}'
+        bash "$ADAPTER_SH") || resp='{"ok":false,"error":"adapter_failed"}'
     fi
 
     local ok new_sid cost turns dur fc err
@@ -133,8 +139,8 @@ _drive_task() {
     fc=$(printf '%s' "$resp" | jq -r '.files_changed // 0')
     err=$(printf '%s' "$resp" | jq -r '.error // ""')
 
-    [[ -n "$new_sid" ]] && { sid="$new_sid"; _db register-session "$task_id" claude "$sid"; }
-    _db log-call "$task_id" "$worker_id" claude "${sid:-}" \
+    [[ -n "$new_sid" ]] && { sid="$new_sid"; _db register-session "$task_id" "$BACKEND" "$sid"; }
+    _db log-call "$task_id" "$worker_id" "$BACKEND" "${sid:-}" \
       "$([[ $ok == true ]] && echo 0 || echo 1)" \
       "$cost" "$turns" "$dur" "$fc"
 
@@ -264,7 +270,7 @@ resume_blocked_task() {
   local worktree="$WORKTREE_BASE/$task_id"
   [[ ! -d "$worktree" ]] && { _log "resume: worktree gone for $task_id"; _db transition "$task_id" failed "worktree_lost"; return 1; }
 
-  local sid; sid=$(_db get-session "$task_id" claude)
+  local sid; sid=$(_db get-session "$task_id" "$BACKEND")
 
   # 解析 answer：JSON 优先取 .answer，否则当纯文本
   local answer
