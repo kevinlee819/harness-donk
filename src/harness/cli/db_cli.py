@@ -98,17 +98,27 @@ def cmd_today_cost(_args: argparse.Namespace) -> int:
     return 0
 
 
+def _tsv_join(row: tuple) -> str:
+    """Join row by tab, substituting '-' for empty strings.
+
+    Reason: bash `IFS=$'\\t' read` collapses consecutive tabs (because tab is
+    a whitespace IFS char), so empty middle fields shift downstream columns.
+    Emit '-' as a sentinel; bash callers treat '-' as 'no value'.
+    """
+    return "\t".join("-" if x == "" else str(x) for x in row)
+
+
 def cmd_query_status(args: argparse.Namespace) -> int:
     rows = db.query_status(args.task_id)
     for r in rows:
-        print("\t".join(str(x) for x in r))
+        print(_tsv_join(r))
     return 0
 
 
 def cmd_query_by_status(args: argparse.Namespace) -> int:
     rows = db.query_by_status(args.status)
     for r in rows:
-        print("\t".join(str(x) for x in r))
+        print(_tsv_join(r))
     return 0
 
 

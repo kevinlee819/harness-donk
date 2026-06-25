@@ -33,7 +33,23 @@ cross_review_enabled: false
 
 ## 5. 需决策时
 
-如果你需要用户/协调者拍板的选择题，把问题写到 `.harness/workers/<worker_id>/guidance.json`（schema 见 docs/data-schemas.md §2.2），blocking=true 即触发上抛。等待 `.harness/inbox/<task_id>.answer` 出现后继续。
+如果你需要用户/协调者拍板的选择题，**不要瞎猜**——写一个 blocking guidance 到环境变量 `$HARNESS_WORKER_DIR/guidance.json` （绝对路径，harness 已 export），格式：
+
+```json
+{
+  "schema_version": 1,
+  "blocking": true,
+  "task_id": "<env $HARNESS_TASK_ID>",
+  "question": "你需要决策的问题",
+  "context": "决策背景（可选）",
+  "options": ["可选方案 A", "可选方案 B"],
+  "created": "<当前 UTC ISO-8601>"
+}
+```
+
+写完后立即结束本轮（不要继续编码），harness 会暂停本任务并通知用户。用户答复后会有新一轮调用，prompt 里会带「上一次提问 / 决策」上下文。
+
+schema 详见 docs/data-schemas.md §2.2。
 
 ## 6. 安全
 

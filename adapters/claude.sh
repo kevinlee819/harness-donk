@@ -43,6 +43,9 @@ cd "$ADAPTER_WORKTREE"
 
 # 让 hooks 读到当前 worker 的 worktree 边界（影响 rm -rf 规则等）
 export HARNESS_WORKTREE="$ADAPTER_WORKTREE"
+# 让 worker 知道自己 worker 目录的绝对路径（用于写 guidance.json / status.json）
+[[ -n "$ADAPTER_WORKER_DIR" ]] && export HARNESS_WORKER_DIR="$ADAPTER_WORKER_DIR"
+[[ -n "$ADAPTER_TASK_ID" ]] && export HARNESS_TASK_ID="$ADAPTER_TASK_ID"
 
 _count_files_changed() {
   git diff --name-only HEAD 2>/dev/null | wc -l | tr -d ' '
