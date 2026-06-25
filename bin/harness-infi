@@ -3,10 +3,16 @@
 #
 # 在当前 harness 项目目录内：
 #   1. 复用或创建 tmux 会话 `harness-<sha8(pwd)>`
-#   2. 该会话内启动交互式 claude，把 coordinator/coordinator.md 注入为 system prompt
-#   3. 把 coordinator/tools/ 加到 PATH，使 harness-task 可被协调者调用
+#   2. window 0 (coordinator): 交互式 claude，coordinator.md 注入 system prompt
+#   3. window 1 (orchestrator): 后台执行平面，长跑 orchestrator.sh（每 5s 轮询）
+#   4. attach 到 coordinator window；用户 Ctrl-B 0/1 可在两窗口间切换
 #
-# 见 docs/interfaces.md §1.1。
+# 选项：
+#   --no-attach        创建会话但不 attach（脚本/CI 用）
+#   --backend NAME     orchestrator 用哪个写者 backend（默 claude）
+#   --model NAME       orchestrator 透传给 adapter（如 claude-sonnet-4-6）
+#
+# 见 docs/interfaces.md §1.1, CLAUDE.md §1 / §2 「唯一入口」原则。
 
 set -uo pipefail
 
@@ -14,6 +20,19 @@ HARNESS_HOME="${HARNESS_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 export HARNESS_HOME
 
 cwd=$(pwd)
+NO_ATTACH=0
+BACKEND="claude"
+MODEL=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-attach) NO_ATTACH=1; shift ;;
+    --backend) BACKEND="$2"; shift 2 ;;
+    --model)   MODEL="$2"; shift 2 ;;
+    -h|--help) sed -n '2,18p' "$0"; exit 0 ;;
+    *) echo "unknown arg: $1" >&2; exit 1 ;;
+  esac
+done
 
 # ── 前置检查 ──
 if [[ ! -f "$cwd/.harness/harness.db" ]]; then
@@ -36,20 +55,25 @@ if [[ ! -f "$coord_md" ]]; then
   exit 2
 fi
 
+if [[ ! -f "$HARNESS_HOME/adapters/${BACKEND}.sh" ]]; then
+  echo "error: unknown backend: $BACKEND (no adapters/${BACKEND}.sh)" >&2
+  exit 2
+fi
+
 # ── 会话名：harness-<sha8(pwd)> ──
 hash=$(printf '%s' "$cwd" | shasum -a 256 | cut -c1-8)
 session="harness-$hash"
 
-# ── 已存在则直接 attach ──
+# ── 已存在则直接 attach（不重建 window，保留用户当前状态）──
 if tmux has-session -t "$session" 2>/dev/null; then
+  [[ $NO_ATTACH -eq 1 ]] && { echo "session $session already exists"; exit 0; }
   exec tmux attach -t "$session"
 fi
 
-# ── 写 launcher 脚本到 .harness/，避免 shell 引号灾难 ──
-# system prompt 含引号 / 反引号 / $ / 换行；不能拼进命令行。
-# 改为 launcher 用 cat "$coord_md" 读，再 exec claude。
-launcher="$cwd/.harness/.coordinator-launcher.sh"
-cat > "$launcher" <<EOF
+# ── 准备 launcher 脚本：避开 shell 引号灾难 ──
+# coordinator: claude 交互式 + coordinator.md system prompt
+coord_launcher="$cwd/.harness/.coordinator-launcher.sh"
+cat > "$coord_launcher" <<EOF
 #!/usr/bin/env bash
 set -uo pipefail
 export HARNESS_HOME='$HARNESS_HOME'
@@ -57,12 +81,38 @@ export HARNESS_DB='$cwd/.harness/harness.db'
 export PATH='$HARNESS_HOME/coordinator/tools:$HARNESS_HOME/bin':"\$PATH"
 exec claude --append-system-prompt "\$(cat '$coord_md')"
 EOF
-chmod +x "$launcher"
+chmod +x "$coord_launcher"
 
-# tmux 启动会话并跑 launcher
-tmux new-session -d -s "$session" -c "$cwd" "$launcher"
+# orchestrator: 长跑 orchestrator.sh（无 --once）
+# 死循环 + sleep 5s 在 queue 空时；任务来了立刻派
+orch_launcher="$cwd/.harness/.orchestrator-launcher.sh"
+cat > "$orch_launcher" <<EOF
+#!/usr/bin/env bash
+# 协调者会话的伴生执行平面：长跑 orchestrator.sh。
+# 异常退出后 tmux 会保留 pane（remain-on-exit on），便于排障。
+set -uo pipefail
+export HARNESS_HOME='$HARNESS_HOME'
+cd '$cwd'
+echo "[infi] orchestrator daemon starting (backend=$BACKEND model=${MODEL:-default})"
+echo "[infi] cwd=$cwd  log=.harness/logs/raw/"
+echo "[infi] Ctrl-C to stop; 'harness-task add' from window 0 to enqueue"
+echo
+exec bash '$HARNESS_HOME/orchestrator.sh' --backend '$BACKEND'${MODEL:+ --model '$MODEL'}
+EOF
+chmod +x "$orch_launcher"
 
-# 阶段二再做：后台拉起 orchestrator daemon
-# 当前 MVP：用户另开终端 `harness run-once` 手动跑一轮
+# ── 创建会话：window 0 = coordinator, window 1 = orchestrator ──
+tmux new-session -d -s "$session" -c "$cwd" -n coordinator "$coord_launcher"
+tmux set-option -t "$session" remain-on-exit on >/dev/null 2>&1 || true
+tmux new-window  -t "$session" -c "$cwd" -n orchestrator "$orch_launcher"
+
+# 默认停在 coordinator window
+tmux select-window -t "$session:0"
+
+if [[ $NO_ATTACH -eq 1 ]]; then
+  echo "session $session created (windows: coordinator + orchestrator)"
+  echo "attach: tmux attach -t $session"
+  exit 0
+fi
 
 exec tmux attach -t "$session"

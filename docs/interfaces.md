@@ -11,13 +11,20 @@
 ### 1.1 `harness-infi`
 
 ```
-harness-infi              # 在当前项目目录内执行
+harness-infi [--no-attach] [--backend <name>] [--model <name>]
 ```
 
-- 行为：在当前目录创建/复用一个 tmux 会话（名 `harness-<project-hash>`），在该会话内启动 `claude` 交互式会话，加载 `coordinator/coordinator.md` 为 system prompt，把 `coordinator/tools/` 注册为可调脚本。
-- 前置：当前目录必须是已 `harness init` 过的项目（存在 `.harness/harness.db`）。
-- 输出：attach 到 tmux 会话。Ctrl+B D detach 后协调者会话继续存活。
-- 失败：未初始化项目 → 提示 `harness init`；缺失 backend CLI → 提示 `harness doctor`。
+- 行为：在当前目录创建/复用一个 tmux 会话（名 `harness-<sha8(pwd)>`），含两个 window：
+  - **window 0 `coordinator`**：交互式 `claude` 加载 `coordinator/coordinator.md` 为 system prompt，PATH 注入 `coordinator/tools/`（`harness-task` 可用）
+  - **window 1 `orchestrator`**：长跑 `orchestrator.sh`（无 `--once`），每 5s 轮询 queue；任务来了立刻派
+- 默认 attach 到 window 0；`Ctrl-B 0/1` 切窗，`Ctrl-B D` detach 后会话继续存活
+- 选项：
+  - `--no-attach`：仅创建会话（脚本/CI 用），结束后用 `tmux attach -t harness-<hash>` 进入
+  - `--backend <name>`：orchestrator 用哪个写者 backend（默 `claude`，需 `adapters/${name}.sh` 存在）
+  - `--model <name>`：透传给 adapter（如 `claude-sonnet-4-6`）
+- 前置：当前目录必须是已 `harness init` 过的项目（`.harness/harness.db` 存在）；`tmux`、`claude` 在 PATH
+- 失败：未初始化 → 提示 `harness init`；缺失 backend CLI / 未知 backend → 提示 `harness doctor` / 选项 typo
+- 实现备注：两个 launcher 脚本写到 `.harness/.coordinator-launcher.sh` 和 `.harness/.orchestrator-launcher.sh`，避开 shell 引号灾难；tmux session 开了 `remain-on-exit on`，orchestrator daemon 挂掉后 pane 仍保留以便排障
 
 ### 1.2 `harness`
 
