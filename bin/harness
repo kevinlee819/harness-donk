@@ -242,11 +242,32 @@ cmd_doctor() {
     printf "  - %-10s not installed (skip)\n" "claude"
   fi
 
-  for opt in codex opencode; do
-    command -v "$opt" >/dev/null 2>&1 \
-      && printf "  - %-10s installed (adapter pending stage 3)\n" "$opt" \
-      || printf "  - %-10s not installed (skip)\n" "$opt"
-  done
+  # codex：发送一句话 + 取最后 agent_message
+  if command -v codex >/dev/null 2>&1; then
+    local out tmp
+    tmp=$(mktemp -t cdx.XXXXXX)
+    out=$(timeout 60 codex exec --json -s read-only --skip-git-repo-check --ephemeral \
+          --dangerously-bypass-approvals-and-sandbox -o "$tmp" \
+          "say only the word: pong" 2>&1) && {
+      local r=""
+      if [[ -f "$tmp" ]]; then r=$(head -c 80 "$tmp" | tr -d '\n'); fi
+      [[ -z "$r" ]] && r=$(printf '%s' "$out" | jq -r 'select(.type=="item.completed" and .item.type=="agent_message") | .item.text' 2>/dev/null | tail -1 | head -c 80)
+      if [[ -n "$r" ]]; then
+        printf "  ✓ %-10s replied: %s\n" "codex" "$r"
+      else
+        printf "  ✗ %-10s no agent_message in output\n" "codex"
+        rc=2
+      fi
+    } || { printf "  ✗ %-10s call failed\n" "codex"; rc=2; }
+    rm -f "$tmp"
+  else
+    printf "  - %-10s not installed (skip)\n" "codex"
+  fi
+
+  # opencode：阶段三未实现
+  command -v opencode >/dev/null 2>&1 \
+    && printf "  - %-10s installed (adapter pending)\n" "opencode" \
+    || printf "  - %-10s not installed (skip)\n" "opencode"
 
   echo
   [[ $rc -eq 0 ]] && echo "OK ✓" || echo "FAILED (rc=$rc)" >&2

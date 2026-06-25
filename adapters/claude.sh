@@ -94,6 +94,15 @@ if [[ -n "${HARNESS_MOCK_ADAPTER:-}" ]]; then
     exit 0
   fi
 
+  # review-style mock：prompt 含 "REVIEW DIFF" → 返回 {approve, issues} JSON 作 result
+  if grep -q "REVIEW DIFF" "$ADAPTER_TASK_FILE" 2>/dev/null; then
+    review_result="${HARNESS_MOCK_REVIEW_RESULT:-}"
+    [[ -z "$review_result" ]] && review_result='{"approve":true,"issues":[]}'
+    jq -nc --arg sid "$fake_sid" --arg r "$review_result" \
+      '{ok:true, session_id:$sid, result:$r, cost_usd:0, num_turns:1, files_changed:0, error:null}'
+    exit 0
+  fi
+
   # 常规 mock 行为：在 worktree 下创建 HELLO.txt 包含 prompt 摘要
   echo "mock-adapter ran: $(echo "$prompt" | head -c 100)" > HELLO.txt
   git add HELLO.txt >/dev/null 2>&1 || true

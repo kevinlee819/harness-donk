@@ -156,13 +156,25 @@
 
 来自 [docs/development-plan.md §3](docs/development-plan.md)：
 
-- [ ] `adapters/codex.sh` — 含 per-worktree flock 串行约束
-- [ ] `adapters/opencode.sh` — 走 `opencode run` 路径
-- [ ] gate 第 5 步 cross_review — diff 喂另一 backend 输出 `{approve, issues}`
-- [ ] AGENTS.md `gate.cross_review.reviewer` 配置开关
-- [ ] `harness doctor` 增强（每个 backend echo 测试）
+### 第一批（2026-06-25 完成）
+- [x] `adapters/codex.sh` — `codex exec --json` 归一化；mkdir 原子互斥串行（macOS 无 flock）
+   - 输出 schema 与 claude.sh 对齐；session_id = `.thread_id`（CLAUDE.md §4.6 说不可用，但 thread_id 至少可记账）
+   - 真实 cost 数据缺失（capability bitmap COST_REPORT=0）
+   - mock 含 REVIEW DIFF / blocking 两种模式
+- [x] gate 第 5 步 cross_review — 真调 reviewer adapter；解析 `{approve, issues}`；reject 即 fail gate
+   - 取 base..HEAD diff，截断到 16KB
+   - 容忍 result 含 markdown 代码块包裹（Python regex 抽 `{...}`）
+   - 空 diff / 缺 reviewer adapter 均有终态
+- [x] AGENTS.md.tmpl 加 `cross_review_reviewer` 配置 + 「写者不审，审者不写」建议
+- [x] claude.sh / codex.sh mock 都识别 REVIEW DIFF 提示返回 JSON result
+- [x] `harness doctor` 加 codex 真 echo 自检（不再仅检查 PATH 存在）
+- [x] 测试：15 files / 103+ cases 全绿（+5 codex adapter / +6 gate cross_review）
+
+### 后续
+- [ ] `adapters/opencode.sh` — `opencode run` 路径（opencode 暂未安装，等用户需要再做）
+- [ ] 真环境跨模型冒烟：claude 写 + codex 审（含一个真有 subtle bug 的 diff 看能否被抓）
 - [ ] 验收：3 个 subtle bug diff 识别率 ≥ 2/3
-- [ ] 验收：adapter 合同所有硬门槛满足
+- [ ] 验收：adapter 合同所有硬门槛满足（capability bitmap、串行锁竞争、超时）
 
 ---
 

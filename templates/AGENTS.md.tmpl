@@ -23,9 +23,12 @@ lint: ""
 test: ""
 diff_audit: ""
 cross_review_enabled: false
+cross_review_reviewer: codex
 ```
 
 > 项目初始化后，请把上面的命令补全成本项目实际可执行的命令（如 `npm test` / `make test`）。`""` 表示跳过该步骤。
+>
+> `cross_review_enabled=true` 时，gate 会把 base..HEAD 的 diff 喂给 `cross_review_reviewer` 指定的 backend（`claude` / `codex`），要求其以 JSON 形式回 `{approve, issues}`。审查未过则视为 gate 失败。建议「写的不审，审的不写」——如本任务由 claude 完成，reviewer 配 codex；反之亦然。
 
 ## 4. 回灌
 
