@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit|Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "{{HARNESS_HOME}}/hooks/pre_tool_use.sh"
+          }
+        ]
+      }
+    ]
+  }
+}

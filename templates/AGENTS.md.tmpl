@@ -1,0 +1,42 @@
+# AGENTS.md — {{PROJECT_NAME}}
+
+本文件是所有 agent 在本项目内必读的共享规约。被 `CLAUDE.md → AGENTS.md` 软链引用。
+
+## 1. 角色与禁区
+
+- 你工作在自己的 git worktree 中，分支名以 `harness/` 开头。
+- **禁止** push、禁止 merge 到主分支、禁止离开当前工作目录。
+- **禁止** 修改 `.harness/`（属于编排器和其他 worker）。
+- 完成任务后必须 `git add` 并 `git commit`。
+
+## 2. 任务规格
+
+任务从 `specs/<task_id>.md` 读取，含背景、期望行为、验收清单。请只完成 spec 内的工作；不要扩大范围。
+
+## 3. 校验门
+
+合并到主分支前会自动跑以下命令；任一失败即回灌错误重做。
+
+```gate
+build: ""
+lint: ""
+test: ""
+diff_audit: ""
+cross_review_enabled: false
+```
+
+> 项目初始化后，请把上面的命令补全成本项目实际可执行的命令（如 `npm test` / `make test`）。`""` 表示跳过该步骤。
+
+## 4. 回灌
+
+如果 gate 失败，下一轮会把失败步骤的错误输出拼到 prompt 重发。请只修复指出的问题，不扩大改动。
+
+## 5. 需决策时
+
+如果你需要用户/协调者拍板的选择题，把问题写到 `.harness/workers/<worker_id>/guidance.json`（schema 见 docs/data-schemas.md §2.2），blocking=true 即触发上抛。等待 `.harness/inbox/<task_id>.answer` 出现后继续。
+
+## 6. 安全
+
+- 涉及 `prod` / `secret` 路径会被 hook 拦截。
+- 涉及主分支的 git 操作会被 hook 拦截。
+- 触发拦截时 stderr 会有原因，按提示修正即可。

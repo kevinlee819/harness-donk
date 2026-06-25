@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+# harness — 管理/观测 CLI
+# 见 docs/interfaces.md §1.2
+#
+# bash 仅负责"调命令"；DB 操作全部走 python -m harness.cli.db_cli。
+# 语言边界见 CLAUDE.md §8 / §4.9。
+
+set -uo pipefail
+
+HARNESS_HOME="${HARNESS_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+export HARNESS_HOME
+source "$HARNESS_HOME/lib/python_env.sh"
+
+_db() { "$HARNESS_PYTHON" -m harness.cli.db_cli "$@"; }
+
+cmd="${1:-help}"; shift || true
+
+cmd_init() {
+  local cwd; cwd=$(pwd)
+  [[ ! -d "$cwd/.git" ]] && { echo "not a git repo: $cwd" >&2; exit 1; }
+  if [[ -f "$cwd/.harness/harness.db" ]]; then
+    echo "already initialized" >&2; return 0
+  fi
+  mkdir -p "$cwd/.harness/workers" "$cwd/.harness/inbox" "$cwd/.harness/events" \
+           "$cwd/.harness/logs/raw" "$cwd/specs"
+  export HARNESS_DB="$cwd/.harness/harness.db"
+  _db init || { echo "db init failed" >&2; exit 1; }
+
+  if [[ ! -f "$cwd/AGENTS.md" ]]; then
+    sed "s/{{PROJECT_NAME}}/$(basename "$cwd")/g" "$HARNESS_HOME/templates/AGENTS.md.tmpl" > "$cwd/AGENTS.md"
+  fi
+  [[ ! -L "$cwd/CLAUDE.md" && ! -f "$cwd/CLAUDE.md" ]] && ln -s AGENTS.md "$cwd/CLAUDE.md"
+
+  if ! grep -q '^\.harness/' "$cwd/.gitignore" 2>/dev/null; then
+    cat "$HARNESS_HOME/templates/gitignore-fragment" >> "$cwd/.gitignore"
+  fi
+
+  # 安装 .claude/settings.json hooks
+  mkdir -p "$cwd/.claude"
+  local settings_path="$cwd/.claude/settings.json"
+  local rendered
+  rendered=$(sed "s|{{HARNESS_HOME}}|$HARNESS_HOME|g" "$HARNESS_HOME/templates/settings.json.tmpl")
+  if [[ ! -f "$settings_path" ]]; then
+    printf '%s\n' "$rendered" > "$settings_path"
+    echo "installed .claude/settings.json (hooks registered)"
+  else
+    printf '%s\n' "$rendered" > "$settings_path.harness-suggested"
+    echo "WARNING: .claude/settings.json exists; suggested hooks written to .claude/settings.json.harness-suggested — merge manually" >&2
+  fi
+
+  echo "harness initialized in $cwd"
+  echo "next: edit AGENTS.md to fill gate commands (test/lint/build)"
+}
+
+cmd_status() {
+  local cwd; cwd=$(pwd)
+  export HARNESS_DB="$cwd/.harness/harness.db"
+  [[ ! -f "$HARNESS_DB" ]] && { echo "not initialized" >&2; exit 1; }
+
+  local task_id="" history=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --task) task_id="$2"; shift 2 ;;
+      --history) history=1; shift ;;
+      *) echo "unknown arg: $1" >&2; exit 1 ;;
+    esac
+  done
+
+  # --task <id> [--history]：单任务详情 + 可选迁移史
+  if [[ -n "$task_id" ]]; then
+    local row
+    row=$(_db query-status "$task_id")
+    if [[ -z "$row" ]]; then
+      echo "no such task: $task_id" >&2
+      exit 1
+    fi
+    IFS=$'\t' read -r id stat wid branch retries reds prio created <<<"$row"
+    printf "ID       : %s\n" "$id"
+    printf "Status   : %s\n" "$stat"
+    printf "Worker   : %s\n" "${wid:--}"
+    printf "Branch   : %s\n" "${branch:--}"
+    printf "Retries  : %s\n" "$retries"
+    printf "Redispatches: %s\n" "$reds"
+    printf "Priority : %s\n" "$prio"
+    printf "Created  : %s\n" "$created"
+
+    if [[ $history -eq 1 ]]; then
+      echo
+      echo "== History =="
+      printf "  %-21s %-12s %-12s %s\n" "TIMESTAMP" "FROM" "TO" "REASON"
+      _db query-history "$task_id" | while IFS=$'\t' read -r ts fs ts2 reason; do
+        printf "  %-21s %-12s %-12s %s\n" "$ts" "${fs:--}" "$ts2" "${reason:--}"
+      done
+    fi
+    return 0
+  fi
+
+  # 默认：全部任务摘要
+  echo "== Today cost =="
+  printf "  \$%.4f\n" "$(_db today-cost)"
+  echo
+  echo "== Tasks =="
+  printf "  %-20s %-12s %-8s %-30s %s\n" "ID" "STATUS" "RETRIES" "BRANCH" "CREATED"
+  _db query-status | while IFS=$'\t' read -r id stat wid branch retries reds prio created; do
+    printf "  %-20s %-12s %-8s %-30s %s\n" "$id" "$stat" "$retries" "${branch:--}" "$created"
+  done
+
+  # 待处理事件计数
+  local pending; pending=$(_db event-pending | wc -l | tr -d ' ')
+  if [[ "$pending" != "0" ]]; then
+    echo
+    printf "== Pending events: %s ==\n" "$pending"
+    _db event-pending | while IFS=$'\t' read -r eid ts etype tid payload; do
+      printf "  #%-4s %s %-16s task=%-12s\n" "$eid" "$ts" "$etype" "${tid:--}"
+    done
+  fi
+}
+
+cmd_backup() {
+  local cwd; cwd=$(pwd)
+  local db_path="$cwd/.harness/harness.db"
+  [[ ! -f "$db_path" ]] && { echo "not initialized" >&2; exit 1; }
+  local out_dir="$cwd/.harness/backups"
+  mkdir -p "$out_dir"
+  local ts; ts=$(date -u +%Y%m%dT%H%M%SZ)
+  local out="$out_dir/harness-$ts.db"
+  # sqlite3 .backup 是在线热备份（持锁短，WAL 仍可读），比直接 cp 安全
+  sqlite3 "$db_path" ".backup '$out'" || { echo "backup failed" >&2; exit 2; }
+  echo "$out"
+}
+
+cmd_run_once() {
+  local cwd; cwd=$(pwd)
+  bash "$HARNESS_HOME/orchestrator.sh" --once --project "$cwd" "$@"
+}
+
+# ── setup：一次性环境校验 + 全局配置目录 ──
+cmd_setup() {
+  local rc=0
+  echo "== Checking dependencies =="
+
+  _check() {
+    local name="$1"; local cmd="$2"; local minver="${3:-}"
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      printf "  ✗ %-12s %s not found on PATH\n" "$name" "$cmd"
+      rc=2; return
+    fi
+    local ver
+    case "$cmd" in
+      sqlite3) ver=$("$cmd" --version 2>/dev/null | awk '{print $1}') ;;
+      *)       ver=$("$cmd" --version 2>/dev/null | head -1) ;;
+    esac
+    printf "  ✓ %-12s %s\n" "$name" "$ver"
+  }
+
+  _check sqlite3 sqlite3
+  _check jq      jq
+  _check git     git
+  _check tmux    tmux
+  _check python3 "$HARNESS_PYTHON"
+
+  # sqlite3 必须 ≥ 3.35（RETURNING）
+  local sv
+  if command -v sqlite3 >/dev/null 2>&1; then
+    sv=$(sqlite3 --version | awk '{print $1}')
+    local major=${sv%%.*}; local rest=${sv#*.}; local minor=${rest%%.*}
+    if (( major < 3 || ( major == 3 && minor < 35 ) )); then
+      echo "  ✗ sqlite3 $sv < 3.35 (RETURNING required)" >&2
+      rc=2
+    fi
+  fi
+
+  # 全局配置目录
+  local conf_dir="${HARNESS_CONFIG_DIR:-$HOME/.config/harness}"
+  if [[ ! -d "$conf_dir" ]]; then
+    mkdir -p "$conf_dir"
+    echo "  ✓ created $conf_dir"
+  fi
+  [[ ! -f "$conf_dir/projects.list" ]] && touch "$conf_dir/projects.list"
+  if [[ ! -f "$conf_dir/config" ]]; then
+    cat > "$conf_dir/config" <<EOF
+# harness 全局配置（首次自动生成）
+budget_daily_usd=10
+session_resume_cap=6
+dead_worker_threshold_min=10
+EOF
+    echo "  ✓ wrote default $conf_dir/config"
+  fi
+
+  echo
+  if [[ $rc -eq 0 ]]; then
+    echo "ALL OK ✓"
+  else
+    echo "FAILED (rc=$rc)" >&2
+  fi
+  return $rc
+}
+
+# ── doctor：各 backend echo 自检 ──
+cmd_doctor() {
+  local rc=0
+  echo "== Backend echo self-check =="
+
+  _backend_check() {
+    local name="$1"; shift
+    if ! command -v "$1" >/dev/null 2>&1; then
+      printf "  ✗ %-10s %s not found\n" "$name" "$1"
+      rc=2; return
+    fi
+    local out
+    out=$(HARNESS_MOCK_ADAPTER=0 timeout 30 "$@" 2>&1) || {
+      printf "  ✗ %-10s call failed (rc=$?)\n" "$name"
+      echo "      $(printf '%s' "$out" | head -1)" >&2
+      rc=2; return
+    }
+    printf "  ✓ %-10s responded\n" "$name"
+  }
+
+  # claude：发送 "echo hi" 并取 .result
+  if command -v claude >/dev/null 2>&1; then
+    local out
+    out=$(timeout 60 claude -p "say only the word: pong" --output-format json --max-turns 1 2>&1) && {
+      local r; r=$(printf '%s' "$out" | jq -r '.result // empty' 2>/dev/null)
+      if [[ -n "$r" ]]; then
+        printf "  ✓ %-10s replied: %s\n" "claude" "$(echo "$r" | head -1 | cut -c1-40)"
+      else
+        printf "  ✗ %-10s no .result in output\n" "claude"
+        rc=2
+      fi
+    } || { printf "  ✗ %-10s call failed\n" "claude"; rc=2; }
+  else
+    printf "  - %-10s not installed (skip)\n" "claude"
+  fi
+
+  for opt in codex opencode; do
+    command -v "$opt" >/dev/null 2>&1 \
+      && printf "  - %-10s installed (adapter pending stage 3)\n" "$opt" \
+      || printf "  - %-10s not installed (skip)\n" "$opt"
+  done
+
+  echo
+  [[ $rc -eq 0 ]] && echo "OK ✓" || echo "FAILED (rc=$rc)" >&2
+  return $rc
+}
+
+# ── attach：attach 到执行平面 tmux session（worker 观测） ──
+cmd_attach() {
+  local cwd; cwd=$(pwd)
+  [[ ! -f "$cwd/.harness/harness.db" ]] && { echo "not initialized" >&2; exit 1; }
+  local hash; hash=$(printf '%s' "$cwd" | shasum -a 256 | cut -c1-8)
+
+  local target="${1:-}"
+  if [[ -z "$target" ]]; then
+    # 默认 attach 到协调者会话
+    local session="harness-$hash"
+    if tmux has-session -t "$session" 2>/dev/null; then
+      exec tmux attach -t "$session"
+    else
+      echo "no coordinator session (run harness-infi first)" >&2
+      exit 1
+    fi
+  else
+    # attach 到具体 worker pane（阶段二实现真正的 worker tmux 后才有意义）
+    echo "worker attach not yet implemented (stage 2)" >&2
+    exit 2
+  fi
+}
+
+cmd_help() {
+  cat <<EOF
+harness — 多 Agent 自驱动编码 Harness
+
+Commands:
+  init                    在当前 git repo 初始化 harness
+  setup                   一次性环境校验 + 建 ~/.config/harness/
+  doctor                  各 backend echo 自检（会真调一次 claude，烧少量 API）
+  status [--task T-XXX [--history]]
+                          任务列表 / 单任务详情 / 迁移史
+  backup                  sqlite3 .backup 落到 .harness/backups/
+  run-once [--mock]       跑一轮编排器（处理一个任务后退出）
+  attach [<worker_id>]    attach 到 tmux（无参 = 协调者会话）
+  help                    本帮助
+
+Coordinator entry: harness-infi   (启动协调者对话面)
+Coordinator tool:  harness-task   (在协调者 PATH 中)
+
+Not yet implemented:
+  stop / ls / backup
+EOF
+}
+
+case "$cmd" in
+  init) cmd_init "$@" ;;
+  setup) cmd_setup "$@" ;;
+  doctor) cmd_doctor "$@" ;;
+  status) cmd_status "$@" ;;
+  backup) cmd_backup "$@" ;;
+  run-once) cmd_run_once "$@" ;;
+  attach) cmd_attach "$@" ;;
+  help|-h|--help|"") cmd_help ;;
+  *) echo "unknown command: $cmd" >&2; cmd_help; exit 1 ;;
+esac
