@@ -27,3 +27,6 @@ specs/
 # Codex CLI 在本仓库根目录会从 CLAUDE.md 派生 AGENTS.md（替换粗糙、易腐烂）。
 # 本仓库 CLAUDE.md 是唯一文档入口；fixture 项目里的 AGENTS.md 不受此影响（路径不同）。
 /AGENTS.md
+
+# 临时 scratch（贴文档 / 录调试输出用，非源码）
+/tmp/

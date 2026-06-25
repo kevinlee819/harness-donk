@@ -147,19 +147,27 @@ LAST_MSG=$(mktemp -t codex-last.XXXXXX)
 EVENTS=$(mktemp -t codex-events.XXXXXX)
 trap '_release_lock; rm -f "$LAST_MSG" "$EVENTS"' EXIT INT TERM
 
-# 构造命令。Codex exec 默认在 -C 工作目录里跑。
-# resume 时 --last 接最近的会话（按 cwd 索引）。
-_args=(exec --json -C "$ADAPTER_WORKTREE" -s "$ADAPTER_SANDBOX"
+# 构造命令。重要：clap 解析时 `exec` 的全局选项（特别是 `-C/--cd`）必须
+# 放在 `resume` 子命令之前，否则 `codex exec resume` 直接报 unexpected argument。
+# 已实测：`exec resume --last -C $dir ...` 会 fail。
+_args=(exec -C "$ADAPTER_WORKTREE" --json -s "$ADAPTER_SANDBOX"
        --dangerously-bypass-approvals-and-sandbox -o "$LAST_MSG"
        --skip-git-repo-check)
 [[ -n "$ADAPTER_MODEL" ]] && _args+=(-m "$ADAPTER_MODEL")
 
-# resume：把 exec 改成 exec resume --last
 if [[ -n "$ADAPTER_SESSION_ID" ]]; then
-  _args=(exec resume --last -C "$ADAPTER_WORKTREE" --json -s "$ADAPTER_SANDBOX"
-         --dangerously-bypass-approvals-and-sandbox -o "$LAST_MSG"
-         --skip-git-repo-check)
-  [[ -n "$ADAPTER_MODEL" ]] && _args+=(-m "$ADAPTER_MODEL")
+  # resume：若 SESSION_ID 是 UUID 就直接传，否则用 --last 取本目录最近一次
+  _args+=(resume)
+  if [[ "$ADAPTER_SESSION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+    _args+=("$ADAPTER_SESSION_ID")
+  else
+    _args+=(--last)
+  fi
+fi
+
+# review 模式（ADAPTER_SANDBOX=read-only 且非 resume）— 不需要持久化 session
+if [[ "$ADAPTER_SANDBOX" == "read-only" && -z "$ADAPTER_SESSION_ID" ]]; then
+  _args+=(--ephemeral)
 fi
 
 start_ms=$(python3 -c 'import time;print(int(time.time()*1000))')

@@ -95,9 +95,13 @@
 - worktree 放在项目**外部兄弟目录** `<project 同级>/.worktrees/<project>/<task_id>/`，不嵌主工作区。
 - 合并是编排器**专属、串行**职责，仅在校验门全绿后；worker 禁止 merge/push 主分支。
 
-### 4.6 Codex 特别约束
-- Codex 无法程序化获取 session ID，只能依赖按工作目录的 `--last`。
-- **每个 worktree 同时最多一个 Codex 会话，且对该 worktree 的 Codex 调用必须串行**。
+### 4.6 Codex 特别约束（与 0.142.2 实测）
+- Codex **可以**程序化获取 session ID：`codex exec --json` 输出 `thread.started.thread_id` UUID；session 文件落在 `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`。
+- resume 优先用 UUID：`codex exec ... resume <uuid>`；UUID 不存在时降级 `--last`（cwd 过滤）。**别只用 `--last`**——cwd 过滤可能匹错相邻 session。
+- **clap 解析关键**：`exec` 的全局选项（`-C/--cd`、`-m/--model`）必须在 `resume` 子命令**之前**；其余如 `--json`、`-s`、`-o`、`--ephemeral` 在 `exec resume` 上也支持，前后均可。
+- **每个 worktree 同时最多一个 Codex 会话，且对该 worktree 的 Codex 调用必须串行**：codex 进程对 git index、文件系统的并发写有竞争风险；锁是防御性的，不靠 codex 自己解决。
+- 无 USD 成本字段：`turn.completed.usage` 只给 token 计数（input/cached_input/output/reasoning_output）；capability bitmap COST_REPORT=0。
+- 跨模型审查时建议加 `--ephemeral`（review 不需要持久化）+ 可选 `-c web_search="disabled"`（review 只看 diff，不应联网）。
 
 ### 4.7 Hooks
 - 硬策略只用 command hook，**不用 HTTP hook**（非 2xx 算非阻塞错误，网络抖动即旁路安全门）。
