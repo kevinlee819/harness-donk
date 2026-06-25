@@ -101,13 +101,15 @@
 - [x] `bin/harness init` 集成 settings.json 安装（保护已有 settings.json，写 .harness-suggested 副本）
 - [x] hooks 单元测试：25 cases，每条规则正反两路
 - [x] `harness init` 集成测试：installs_settings_json / preserves_existing_settings
-- [ ] `hooks/stop.sh` — 完成度强制（阶段二，需 task state 关联）
-- [ ] `hooks/notification.sh` — 阶段二，需 notify 管道
+- [x] `hooks/notification.sh` — 阶段二 iter 2 完成（needs_decision/task_failed/budget_exceeded 触发；macOS osascript + notify.log）
+- [ ] `hooks/stop.sh` — 完成度强制（需 task state 关联；目前用 `--permission-mode bypassPermissions` 让模型自由结束）
 
 ### 协调者会话
 - [x] `bin/harness-infi` — tmux 新建/复用会话，启动 `claude` 加载 coordinator.md（用 launcher 脚本避开引号灾难）
 - [x] `coordinator/coordinator.md` — system prompt：八原则、打扰策略、harness-task 用法、spec 模板、入队前必填检查
 - [x] tmux 会话名规范：`harness-<sha8(pwd)>`
+- [x] **harness-infi 双 window**（2026-06-25 #1）：window 0=coordinator + window 1=orchestrator daemon；`--no-attach` / `--backend` / `--model` 选项；remain-on-exit 防 pane 关闭丢错；4 infra test 覆盖
+- [x] **协调者真启动端到端验证**（2026-06-25 #1）：claude --print + coordinator.md 真使用 `harness-task add`，写出完整模板 spec → orchestrator 派给 worker → gate 失败一次（我自己配置错） → worker 回灌自修 → merge。$0.36 / 4m15s。原则一「统一入口持有上下文」首次端到端验证
 
 ### 其他
 - [x] `bin/harness setup` — 校验 sqlite3 ≥ 3.35 / jq / git / tmux / python；建 `~/.config/harness/{config,projects.list}`
@@ -115,7 +117,10 @@
 - [x] `bin/harness attach` — 默认 attach 协调者会话；worker pane 阶段二
 - [x] adapter 原始日志 envelope 加 task_id / worker_id / prompt_path（替代独立 lib/log.sh）
 - [x] `lib/budget.sh`（手算版）— `budget_today` / `budget_check` 只读不杀；`budget_kill_switch` 阶段二
-- [ ] 阶段一验收：5 个真实小任务一次过门率 ≥ 60%
+- [~] 阶段一验收：5 个真实小任务一次过门率 ≥ 60%
+   - 已跑 4 个真 Claude 任务全部 MERGED：T-hello1（hello.txt）、T-greet（greeting.txt）、T-license（BLOCKED→answer→MIT）、T-retry（codex 写）、T-001（coord 派发）
+   - 一次过门：T-hello1 ✓、T-greet ✓、T-license ✓（一次问题→一次答完通）、T-retry ✓（codex 写）、T-001 一次回灌（gate 配置我自己写错）
+   - **样本基本够用了**，但都是设计过的任务；要严格验收需未事先调好的真实 5 个任务
 
 ---
 
@@ -154,10 +159,10 @@
 - [x] 测试：17 文件 / 113+ cases 全绿（+4 e2e orphan/blocked-timeout / +5 unit db queries）
 
 ### Iteration 2 仍待
-- [ ] orchestrator 周期扫描 events 注入协调者会话（待协调者会话真启动后再做；tmux send-keys 不可靠，可能改 file watcher）
-- [ ] 验收：8 任务 / 8 小时离场无人值守，≥ 5 MERGED（前置：协调者真启动）
-- [ ] 验收：`kill -9` orchestrator + workers 后重启续跑，无半截中间态（孤儿回收已就位，但还没真模拟 kill -9）
-- [ ] 验收：模拟 timeout → 自动重派一次 → 失败 → FAILED 上抛（孤儿回收 e2e 已覆盖一半，差 timeout 触发路径）
+- [ ] orchestrator 周期扫描 events 注入协调者会话（协调者会话已启动，但 tmux send-keys 不可靠；考虑 file watcher 或让协调者主动 `harness status` 轮询）
+- [ ] 验收：8 任务 / 8 小时离场无人值守，≥ 5 MERGED（**所有前置已就绪**：orphan reaper + BLOCKED timeout + harness-infi 双 window + 协调者已验证；可挑一晚跑）
+- [ ] 验收：`kill -9` orchestrator + workers 后重启续跑，无半截中间态（机制就位：orphan reaper 单元 + e2e 测试 4 cases，但**没真模拟 kill -9 重启序列**）
+- [ ] 验收：模拟 timeout → 自动重派一次 → 失败 → FAILED 上抛（orphan reaper 覆盖了状态机一半，差 timeout 触发路径）
 
 ---
 
@@ -167,9 +172,10 @@
 
 ### 第一批（2026-06-25 完成）
 - [x] `adapters/codex.sh` — `codex exec --json` 归一化；mkdir 原子互斥串行（macOS 无 flock）
-   - 输出 schema 与 claude.sh 对齐；session_id = `.thread_id`（CLAUDE.md §4.6 说不可用，但 thread_id 至少可记账）
+   - 输出 schema 与 claude.sh 对齐；session_id = `.thread_id`（codex 0.142 可拿 UUID，CLAUDE.md §4.6 已更新）
    - 真实 cost 数据缺失（capability bitmap COST_REPORT=0）
    - mock 含 REVIEW DIFF / blocking 两种模式
+   - **审完官方文档后修了 resume 路径 bug**（`exec resume` 之前必须放 `-C`，否则 clap fail）+ UUID-优先 resume + `--ephemeral` for review
 - [x] gate 第 5 步 cross_review — 真调 reviewer adapter；解析 `{approve, issues}`；reject 即 fail gate
    - 取 base..HEAD diff，截断到 16KB
    - 容忍 result 含 markdown 代码块包裹（Python regex 抽 `{...}`）
@@ -193,10 +199,10 @@
 - [x] 修观测缺口：gate cross_review 调用现也落 `.harness/logs/raw/`（worktree 回收前抢救出来）
 
 ### 阶段三剩余
-- [ ] `adapters/opencode.sh` — `opencode run` 路径（opencode 暂未安装，等用户需要再做）
-- [ ] 跨模型审查 calls 记账：review 调用没进 calls 表（gate.sh 不写 DB）→ 跨模型成本不可见。补 calls 表写入或单独 reviews 表
+- [-] `adapters/opencode.sh` — `opencode run` 路径（opencode 暂未安装，等用户需要再做）
+- [-] 跨模型审查 calls 记账（2026-06-25 用户决定先不管：codex `cost_usd=null` 本身已是观测黑洞，没好办法解决）
 - [ ] reviewer 选择从「单 backend」升级到 spec 级别（不同 task 不同 reviewer）
-- [ ] 验收：3 个 subtle bug diff 识别率 ≥ 2/3（当前 1/1 命中）
+- [ ] 验收：3 个 subtle bug diff 识别率 ≥ 2/3（当前 1/1 命中 — sleep-before-first-attempt 的 retry bug 被精准抓出）
 - [ ] 验收：adapter 合同所有硬门槛满足（capability bitmap、串行锁竞争、超时）
 
 ---
@@ -219,20 +225,17 @@
 ## 🔵 持续事项（横切）
 
 ### 测试设施
-- [x] `tests/run.sh` — 测试发现 + 子进程隔离 + 汇总报告
+- [x] `tests/run.sh` — 测试发现（.sh + .py） + 子进程隔离 + 汇总报告
 - [x] `tests/lib/assert.sh` — eq/neq/match/file/json/exit_code 等断言
 - [x] `tests/lib/setup.sh` — make_fixture_project / set_gate_test_cmd / 自动清理
-- [x] `tests/unit/test_atomic_write.sh` — 6 cases
-- [x] `tests/unit/test_db.sh` — 11 cases（含 args[@] 回归 + 依赖检查）
-- [x] `tests/unit/test_gate.sh` — 6 cases
-- [x] `tests/unit/test_harness_task.sh` — 10 cases
-- [x] `tests/integration/test_e2e_success.sh` — 完整成功路径
-- [x] `tests/integration/test_e2e_retry_failed.sh` — 回灌耗尽 FAILED
-- [x] `tests/integration/test_init_idempotent.sh` — init 幂等 + 非 git 失败
-- [x] **总计 38 cases，~7s 跑完，全绿**
-- [ ] adapter 单测（claude.sh mock + 错误路径）
-- [ ] orchestrator 死 worker 检测路径（阶段二后）
-- [ ] 真 Claude 集成（手工，单独 `tests/manual/` 目录，不进 run.sh 默认）
+- [x] **当前规模：18 文件 / 117+ cases / ~36s 全绿**
+   - unit (.sh)：atomic_write 6 / gate 6 / hooks 25 / notify 5 / notification_hook 3 / budget 4 / backup 3 / codex_adapter 5 / gate_cross_review 6
+   - unit (.py)：db (含 events / orphan / blocked-overdue) ~25 / harness_task 11
+   - integration (.sh)：e2e_success 2 / e2e_retry_failed 1 / e2e_blocked_resume 2 / e2e_backend_switch 3 / e2e_orphan_reaper 4 / init_idempotent 5 / harness_infi 4
+- [x] orchestrator 孤儿任务回收 + BLOCKED 超时（阶段二 #3）
+- [ ] adapter 单测：claude.sh 真模式错误路径（exit code 非零、非 JSON 输出、timeout）；codex.sh resume by UUID 用 mock 模拟
+- [ ] 真 Claude/Codex 集成（手工，单独 `tests/manual/` 目录，不进 run.sh 默认）
+- [ ] **kill -9 续跑回归测试**：脚本化模拟「跑到一半 kill 编排器 → 重启 → 任务正确续跑」
 
 ### 其他
 - [ ] schema_version 升级流程演练一次（人造改一个字段，三端同步）
@@ -242,10 +245,13 @@
 
 ## 📌 决策待办（需要用户确认的设计点）
 
-- [ ] **notify 通道**：阶段二实现时选 tmux 内消息 / 桌面通知 / webhook 中的哪条？
-- [ ] **预算默认值**：`~/.config/harness/config` 中 `budget_daily_usd` 默认 10 USD 是否合适？
-- [ ] **死 worker 阈值**：10 分钟是否过长/过短？根据真实任务耗时调整
+- [x] **notify 通道**（已定）：macOS 桌面通知 + `.harness/logs/notify.log` 永远落盘 + `events` 表 + JSON 文件四路并行。tmux 内消息不可靠暂未做
+- [ ] **预算默认值**：`~/.config/harness/config` 中 `budget_daily_usd` 默认 10 USD 是否合适？尚未在真长跑后调校
+- [ ] **死 worker 阈值**：10 分钟（dead_worker_threshold_min）是否过长/过短？已实装但没真长跑校准；codex 单 turn 可能 1-2 分钟，10min 应该够
+- [ ] **BLOCKED 超时**：72h（blocked_timeout_hours）是否合适？默认值看起来对个人用，但需要长跑数据
 - [ ] **session_resume_cap**：默认 6 轮，需在真实任务跑后校准
+- [ ] **reviewer 默认值**：当前 AGENTS.md.tmpl 默认 `cross_review_reviewer: codex`。原则「写者不审，审者不写」下，用户 `harness init` 默认 worker 是 claude → reviewer codex 是对的。但如果用户拿 codex 当 writer（如 D1），需手动改成 claude。要不要让 `harness init --backend codex` 时自动反转？
+- [ ] **跨模型审查 cost 记账**：codex `cost_usd=null` + gate.sh 不写 calls 表，跨模型工作流的成本完全不可见。token-based 估算还是单独 reviews 表？（用户说先不管）
 
 ---
 
