@@ -1,0 +1,25 @@
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+
+# Claude Code 会话状态（开发期残留，不属于本仓库）
+.claude/
+
+# harness 运行时产物（开发期在本目录跑 smoke 测试时会被生成；
+# 仍属于「工具本身不复制进项目」原则的反面：不让 runtime artifact 反向污染工具仓库）
+.harness/
+.worktrees/
+specs/
+
+# 编辑器 / OS
+.DS_Store
+*.swp
+*~
