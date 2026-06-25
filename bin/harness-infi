@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# harness-infi — 用户唯一入口
+#
+# 在当前 harness 项目目录内：
+#   1. 复用或创建 tmux 会话 `harness-<sha8(pwd)>`
+#   2. 该会话内启动交互式 claude，把 coordinator/coordinator.md 注入为 system prompt
+#   3. 把 coordinator/tools/ 加到 PATH，使 harness-task 可被协调者调用
+#
+# 见 docs/interfaces.md §1.1。
+
+set -uo pipefail
+
+HARNESS_HOME="${HARNESS_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+export HARNESS_HOME
+
+cwd=$(pwd)
+
+# ── 前置检查 ──
+if [[ ! -f "$cwd/.harness/harness.db" ]]; then
+  echo "error: not a harness project (no .harness/harness.db)" >&2
+  echo "       run: harness init" >&2
+  exit 1
+fi
+
+for bin in tmux claude; do
+  if ! command -v "$bin" >/dev/null 2>&1; then
+    echo "error: $bin not found on PATH" >&2
+    [[ "$bin" == "claude" ]] && echo "       run: harness doctor" >&2
+    exit 2
+  fi
+done
+
+coord_md="$HARNESS_HOME/coordinator/coordinator.md"
+if [[ ! -f "$coord_md" ]]; then
+  echo "error: coordinator system prompt missing: $coord_md" >&2
+  exit 2
+fi
+
+# ── 会话名：harness-<sha8(pwd)> ──
+hash=$(printf '%s' "$cwd" | shasum -a 256 | cut -c1-8)
+session="harness-$hash"
+
+# ── 已存在则直接 attach ──
+if tmux has-session -t "$session" 2>/dev/null; then
+  exec tmux attach -t "$session"
+fi
+
+# ── 写 launcher 脚本到 .harness/，避免 shell 引号灾难 ──
+# system prompt 含引号 / 反引号 / $ / 换行；不能拼进命令行。
+# 改为 launcher 用 cat "$coord_md" 读，再 exec claude。
+launcher="$cwd/.harness/.coordinator-launcher.sh"
+cat > "$launcher" <<EOF
+#!/usr/bin/env bash
+set -uo pipefail
+export HARNESS_HOME='$HARNESS_HOME'
+export HARNESS_DB='$cwd/.harness/harness.db'
+export PATH='$HARNESS_HOME/coordinator/tools:$HARNESS_HOME/bin':"\$PATH"
+exec claude --append-system-prompt "\$(cat '$coord_md')"
+EOF
+chmod +x "$launcher"
+
+# tmux 启动会话并跑 launcher
+tmux new-session -d -s "$session" -c "$cwd" "$launcher"
+
+# 阶段二再做：后台拉起 orchestrator daemon
+# 当前 MVP：用户另开终端 `harness run-once` 手动跑一轮
+
+exec tmux attach -t "$session"

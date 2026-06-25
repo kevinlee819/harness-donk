@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Thin shim — delegates to the Python implementation.
+# 协调者 PATH 上保持 harness-task 可调；uv sync 后用 .venv/bin/python3，否则系统 python3。
+set -euo pipefail
+HARNESS_HOME="${HARNESS_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+export HARNESS_HOME
+source "$HARNESS_HOME/lib/python_env.sh"
+exec "$HARNESS_PYTHON" -m harness.cli.harness_task "$@"
