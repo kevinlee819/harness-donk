@@ -101,8 +101,14 @@ def drain_queue(
     project_dir: Path,
     backend: str,
     harness_home: Path,
+    on_done=None,  # Optional[Callable[[str], None]] — called after each merge attempt
 ) -> int:
-    """Pop and merge all queued requests serially. Returns count processed."""
+    """Pop and merge all queued requests serially. Returns count processed.
+
+    `on_done(task_id)` fires whether merge succeeded or not — used by the
+    orchestrator to remove the task from `pending_merge` so reap_orphans
+    no longer needs to protect it.
+    """
     n = 0
     while True:
         try:
@@ -113,5 +119,11 @@ def drain_queue(
             do_merge(req, project_dir, backend, harness_home)
         except Exception:
             log.exception("merge crashed for %s", req.task_id)
+        finally:
+            if on_done is not None:
+                try:
+                    on_done(req.task_id)
+                except Exception:
+                    log.exception("on_done hook failed for %s", req.task_id)
         n += 1
     return n

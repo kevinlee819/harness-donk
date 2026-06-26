@@ -64,7 +64,7 @@
 - [x] hooks 环境：导出 `HARNESS_WORKTREE` 给 pre_tool_use 用
 - [x] 原始日志 envelope 含 task_id / worker_id / prompt_path
 - [x] mock 模式：`HARNESS_MOCK_ADAPTER=1` 走假后端（不烧 API）
-- [ ] `files_changed` 准确度：当前 `git diff HEAD`，commit 后为 0；后置用 `base..HEAD` 改进
+- [x] `files_changed` 准确度：claude.sh / codex.sh 改用 `base..HEAD`（fallback main → master → diff HEAD）
 
 ### Orchestrator
 - [x] `orchestrator.sh --once` — 单次循环：claim → worktree → adapter → gate → merge
@@ -159,10 +159,10 @@
 - [x] 测试：17 文件 / 113+ cases 全绿（+4 e2e orphan/blocked-timeout / +5 unit db queries）
 
 ### Iteration 2 仍待
-- [ ] orchestrator 周期扫描 events 注入协调者会话（协调者会话已启动，但 tmux send-keys 不可靠；考虑 file watcher 或让协调者主动 `harness status` 轮询）
-- [ ] 验收：8 任务 / 8 小时离场无人值守，≥ 5 MERGED（**所有前置已就绪**：orphan reaper + BLOCKED timeout + harness-infi 双 window + 协调者已验证；可挑一晚跑）
-- [ ] 验收：`kill -9` orchestrator + workers 后重启续跑，无半截中间态（机制就位：orphan reaper 单元 + e2e 测试 4 cases，但**没真模拟 kill -9 重启序列**）
-- [ ] 验收：模拟 timeout → 自动重派一次 → 失败 → FAILED 上抛（orphan reaper 覆盖了状态机一半，差 timeout 触发路径）
+- [-] orchestrator 周期扫描 events 注入协调者会话 — 已用 pull-on-re-engagement 替代（coordinator.md §2.2）。push 路径（tmux send-keys / file watcher）原则上更弱（不可靠 / 状态外置），不做
+- [x] `kill -9` 续跑回归测试（自动化版）— test_e2e_kill_recovery 2 case，真起 orchestrator + SIGKILL 进程树 + 重启 → orphan reap → re-run → merged。**过程中发现并修复两个真 bug**：(1) `updated < datetime('now', ?)` 字符串比较坑（ISO-8601 `T`/`Z` vs SQL `datetime('now')` 空格无 Z）→ 改 `strftime('%s', ...)`；(2) worker 退出后清 `in_flight`，下个 loop 顶端 reap 看到 `gating` 任务无主 → 误判孤儿 → 双派 → 改用 `pending_merge` 集合显式守住 worker 退出到 merge 完成之间的窗口
+- [ ] 验收：8 任务 / 8 小时离场无人值守，≥ 5 MERGED（用户明示先收下）
+- [ ] 验收：模拟 timeout → 自动重派一次 → 失败 → FAILED 上抛（orphan reaper 覆盖了状态机一半，差 timeout 触发路径；用户明示先收下）
 
 ---
 
@@ -232,15 +232,15 @@
 - [x] `tests/run.sh` — 测试发现（.sh + .py） + 子进程隔离 + 汇总报告
 - [x] `tests/lib/assert.sh` — eq/neq/match/file/json/exit_code 等断言
 - [x] `tests/lib/setup.sh` — make_fixture_project / set_gate_test_cmd / 自动清理
-- [x] **当前规模：25 文件 / 145+ cases / ~52s 全绿**（阶段四完成 + harness attach）
+- [x] **当前规模：26 文件 / 147+ cases / ~55s 全绿**（kill -9 续跑 + race fix 后）
    - unit (.sh)：attach 5 / gate 6 / hooks 25 / notification_hook 3 / backup 3 / claude_adapter 6 / codex_adapter 7 / gate_cross_review 8 / events_cli 4
    - unit (.py)：atomic_write 5 / budget_python 4 / notify_python 4 / orchestrator_pool 5 / merge_serial 3 / db (含 events / orphan / blocked-overdue / migration drill) 29 / harness_task 11
-   - integration (.sh)：e2e_success 2 / e2e_retry_failed 1 / e2e_blocked_resume 2 / e2e_backend_switch 3 / e2e_orphan_reaper 4 / e2e_depends_on 2 / e2e_parallel 3 / init_idempotent 7 / harness_infi 4
+   - integration (.sh)：e2e_success 2 / e2e_retry_failed 1 / e2e_blocked_resume 2 / e2e_backend_switch 3 / e2e_orphan_reaper 4 / e2e_depends_on 2 / e2e_parallel 3 / e2e_kill_recovery 2 / init_idempotent 7 / harness_infi 4
 - [x] orchestrator 孤儿任务回收 + BLOCKED 超时（阶段二 #3）
 - [x] adapter 单测：claude.sh 错误路径 + mock 全分支（6 case）；codex.sh resume by UUID mock 验证（7 case）
 - [x] **tests/manual/** 目录建立 — 真模型 smoke（claude / codex / cross_review / coordinator 4 个脚本 + README）；不进 run.sh
 - [x] schema_version 升级框架 + 演练（runner code + 4 drill cases + docs/data-schemas.md §7 重写）
-- [ ] **kill -9 续跑回归测试**：脚本化模拟「跑到一半 kill 编排器 → 重启 → 任务正确续跑」
+- [x] **kill -9 续跑回归测试**：tests/integration/test_e2e_kill_recovery.sh — 真起 orchestrator → 进程树 SIGKILL → 重启 reap → 续跑 merged（2 case 全绿）
 
 ### 其他
 - [ ] schema_version 升级流程演练一次（人造改一个字段，三端同步）
@@ -251,10 +251,10 @@
 ## 📌 决策待办（需要用户确认的设计点）
 
 - [x] **notify 通道**（已定）：macOS 桌面通知 + `.harness/logs/notify.log` 永远落盘 + `events` 表 + JSON 文件四路并行。tmux 内消息不可靠暂未做
-- [ ] **预算默认值**：`~/.config/harness/config` 中 `budget_daily_usd` 默认 10 USD 是否合适？尚未在真长跑后调校
-- [ ] **死 worker 阈值**：10 分钟（dead_worker_threshold_min）是否过长/过短？已实装但没真长跑校准；codex 单 turn 可能 1-2 分钟，10min 应该够
-- [ ] **BLOCKED 超时**：72h（blocked_timeout_hours）是否合适？默认值看起来对个人用，但需要长跑数据
-- [ ] **session_resume_cap**：默认 6 轮，需在真实任务跑后校准
+- [-] **预算默认值**：`budget_daily_usd=10 USD` 用户默认收下；长跑后再校
+- [-] **死 worker 阈值**：`dead_worker_threshold_min=10` 用户默认收下；codex 单 turn 1-2 分钟，10min 安全
+- [-] **BLOCKED 超时**：`blocked_timeout_hours=72` 用户默认收下；个人用足够
+- [-] **session_resume_cap**：默认 6 轮收下；真实长跑后校准
 - [x] **reviewer 默认值**：`harness init --backend <writer>` 自动反转 reviewer（claude↔codex），生成者-裁判分离原则保持默认设置即满足
 - [ ] **跨模型审查 cost 记账**：codex `cost_usd=null` + gate.sh 不写 calls 表，跨模型工作流的成本完全不可见。token-based 估算还是单独 reviews 表？（用户说先不管）
 

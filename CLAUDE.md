@@ -158,8 +158,8 @@ QUEUED → DISPATCHED → WORKING → GATING → MERGED（终态）
 
 **具体归属**：
 
-- `orchestrator.sh`、`adapters/*.sh`、`lib/gate.sh`、`lib/atomic_write.sh`、`hooks/*.sh`、`bin/harness` → bash
-- `src/harness/db.py`、`src/harness/cli/harness_task.py`、`src/harness/cli/db_cli.py` → Python
+- `orchestrator.sh`（shim）、`adapters/*.sh`、`lib/gate.sh`、`hooks/*.sh`、`bin/harness` → bash
+- `src/harness/{db,orchestrator,worker,merge,adapter,notify,budget,config,atomic_write}.py` + `cli/{harness_task,db_cli,orchestrator_cli}.py` → Python
 - `coordinator/coordinator.md`、`templates/AGENTS.md.tmpl` → Markdown / 提示词
 - `coordinator/tools/harness-task` 是薄 shim，`exec python3 -m harness.cli.harness_task`
 

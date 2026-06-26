@@ -53,6 +53,14 @@ export HARNESS_WORKTREE="$ADAPTER_WORKTREE"
 [[ -n "$ADAPTER_TASK_ID" ]] && export HARNESS_TASK_ID="$ADAPTER_TASK_ID"
 
 _count_files_changed() {
+  # base..HEAD（branch 视角全量改动）— worker 已 commit 后 `git diff HEAD` 会归零。
+  local base
+  for ref in main master; do
+    if base=$(git merge-base HEAD "$ref" 2>/dev/null); then
+      git diff --name-only "$base"..HEAD 2>/dev/null | wc -l | tr -d ' '
+      return
+    fi
+  done
   git diff --name-only HEAD 2>/dev/null | wc -l | tr -d ' '
 }
 
@@ -106,6 +114,11 @@ if [[ -n "${HARNESS_MOCK_ADAPTER:-}" ]]; then
     fake_sid="$ADAPTER_SESSION_ID"
   else
     fake_sid="codex-mock-$(date +%s)"
+  fi
+
+  # 测试钩子：与 claude.sh 对齐 — sleep N 秒后再写文件，给杀进程留窗口
+  if [[ -n "${HARNESS_MOCK_SLEEP_S:-}" ]]; then
+    sleep "$HARNESS_MOCK_SLEEP_S"
   fi
 
   # 复用 mock blocking 钩子，给 cross-model 风格的 mock 也留可观测面

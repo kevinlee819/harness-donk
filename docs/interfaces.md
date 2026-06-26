@@ -182,36 +182,30 @@ bash adapters/claude.sh
 
 ## 5. SQLite 封装（M5）
 
-### 5.1 `lib/db.sh` 公共函数
+### 5.1 `src/harness/db.py` 公共函数（Python）
 
-```bash
-db_init <db_path>                           # 执行 schema/harness.sql，幂等
+bash 入口通过 `harness-db <subcommand>` console script 调用（见 `src/harness/cli/db_cli.py`）。Python 调用方直接 `from harness import db`。
 
-db_claim                                    # stdout: T-XXX,<spec_path>;空表则空
-                                            # 原子 UPDATE...RETURNING
-
-db_transition <task_id> <to_state> [reason] # 写 tasks.status + transitions
-
-db_log_call <task_id> <worker_id> <backend> <session_id> <exit_code> \
-            <cost_usd> <num_turns> <duration_ms> <files_changed>
-
-db_register_session <task_id> <backend> <session_id>
-
-db_refresh_session <task_id>                # 更新 last_seen=now
-
-db_scan_dead_workers <threshold_minutes>    # stdout: task_id 列表
-
-db_today_cost                               # stdout: float
-
-db_query_status [--task <id>] [--state <s>] # JSON 输出
+```python
+db.init(schema_sql_path)                        # 跑 schema/harness.sql + 增量 migrations，幂等
+db.claim(worker_id)                             # 原子 UPDATE...RETURNING → (task_id, spec_path) 或 None
+db.transition(task_id, to_state, reason="")    # 写 tasks.status + transitions（BEGIN IMMEDIATE）
+db.log_call(task_id, worker_id, backend, sid, exit_code, cost, turns, duration_ms, files_changed)
+db.register_session(task_id, backend, session_id)
+db.session_touch(task_id, backend)              # 刷新 last_seen=now
+db.query_orphans(threshold_min, exclude_ids=[]) # 列出崩溃残留 transient 状态任务
+db.today_cost()                                 # 今日累计 USD（float）
+db.query_status(task_id=None)                   # 任务列表
+db.event_write / event_query_pending / event_mark_delivered
 ```
 
 **实现要求**：
 
-- 每个函数一次短连接：`sqlite3 "$DB_PATH" "..."`，不长连。
+- 每次调用一个短连接（`with _connect() as c:`），无长连。
 - 必须 `PRAGMA busy_timeout=5000` 与 `journal_mode=WAL`（建库时一次性设）。
-- 启动校验 `sqlite3 --version` ≥ 3.35（`RETURNING` 依赖）。
-- 输入参数全部用 sqlite3 `--bail` + bind 形式或 jq 严格转义，**禁止字符串拼 SQL**。
+- 启动校验 SQLite ≥ 3.35（`RETURNING` 依赖）。
+- 多写事务用 `BEGIN IMMEDIATE`（让 busy_timeout 在写锁竞争下生效）。
+- 比较时间戳用 `strftime('%s', ...)`，不要 string `<`（ISO-8601 的 `T`/`Z` 不与 SQL `datetime('now')` 同格式）。
 
 ### 5.2 文件层（M6）
 
@@ -223,11 +217,11 @@ db_query_status [--task <id>] [--state <s>] # JSON 输出
 | `workers/<id>/guidance.json` | worker | `blocking==true` 触发 WORKING→BLOCKED + notify |
 | `inbox/<id>.answer` | 人/协调者 | 触发 BLOCKED→WORKING，answer 注入下一轮 prompt |
 
-文件写入函数：
+文件写入（`src/harness/atomic_write.py`）：
 
-```bash
-atomic_write_json <path> <json_string>      # tmp + rename
-schema_check <path> <expected_version>      # 失败则拒读
+```python
+write_json(path, obj)                       # tmp + rename
+write_text(path, content)                   # tmp + rename
 ```
 
 ---

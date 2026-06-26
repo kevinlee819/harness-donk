@@ -47,13 +47,24 @@ class RuntimeConfig:
 
 
 class Pool:
-    """Worker slot bookkeeping. Slots are w1..wN; reused as threads finish."""
+    """Worker slot bookkeeping. Slots are w1..wN; reused as threads finish.
+
+    Tracks two distinct sets of "this orchestrator owns it" task IDs:
+      - `_in_flight`: a WorkerThread is actively running the task
+      - `_pending_merge`: worker finished + posted MergeRequest, but main
+        thread hasn't merged yet. Without this, the reaper can see a task
+        in 'gating' state with no live worker (worker exited after posting)
+        and falsely reap it, causing double-dispatch.
+
+    `protected_task_ids()` returns the union — what reap_orphans must exclude.
+    """
 
     def __init__(self, size: int):
         self.size = size
         self._free: list[str] = [f"w{i+1}" for i in range(size)]
         self._busy: dict[str, WorkerThread] = {}
         self._in_flight: dict[str, str] = {}  # worker_id -> task_id
+        self._pending_merge: set[str] = set()
         self._lock = threading.Lock()
 
     def free_slot(self) -> Optional[str]:
@@ -73,13 +84,31 @@ class Pool:
                 self._free.append(worker_id)
                 self._free.sort()  # keep deterministic order
 
+    def mark_pending_merge(self, task_id: str) -> None:
+        with self._lock:
+            self._pending_merge.add(task_id)
+
+    def unmark_pending_merge(self, task_id: str) -> None:
+        with self._lock:
+            self._pending_merge.discard(task_id)
+
     def in_flight_task_ids(self) -> list[str]:
         with self._lock:
             return list(self._in_flight.values())
 
+    def protected_task_ids(self) -> list[str]:
+        """Union of in-flight + pending-merge — what reaper must exclude."""
+        with self._lock:
+            return list(set(self._in_flight.values()) | self._pending_merge)
+
     def busy_count(self) -> int:
         with self._lock:
             return len(self._busy)
+
+    def has_work(self) -> bool:
+        """True if any worker is running OR any merge is queued for main thread."""
+        with self._lock:
+            return bool(self._busy or self._pending_merge)
 
     def join_all(self, timeout: float = 60.0) -> None:
         with self._lock:
@@ -102,7 +131,11 @@ def _handle_sigint(signum, frame) -> None:
 def _reap_orphans(cfg: RuntimeConfig) -> None:
     threshold = int(read_config("dead_worker_threshold_min", "10"))
     max_red = int(os.environ.get("HARNESS_MAX_REDISPATCHES", "2"))
-    exclude = _pool.in_flight_task_ids() if _pool else []
+    # Exclude both: actively-running workers' tasks AND tasks awaiting merge.
+    # The second set matters because workers exit immediately after posting
+    # a MergeRequest — without protected_task_ids, a tight reap loop sees the
+    # task in 'gating' with no live worker and falsely reaps it.
+    exclude = _pool.protected_task_ids() if _pool else []
     try:
         rows = db.query_orphans(threshold, exclude_ids=exclude)
     except Exception:
@@ -196,6 +229,7 @@ def _make_job(cfg: RuntimeConfig, worker_id: str, task_id: str,
         mock=cfg.mock,
         max_retries=cfg.max_retries,
         merge_queue=_merge_q,
+        mark_pending_merge=(_pool.mark_pending_merge if _pool else None),
     )
 
 
@@ -281,8 +315,12 @@ def run(cfg: RuntimeConfig) -> int:
                 claimed = _claim_into_pool(cfg)
                 spawned_any = spawned_any or claimed > 0
 
-        # Drain merges serially (main thread)
-        merge_mod.drain_queue(_merge_q, cfg.project_dir, cfg.backend, cfg.harness_home)
+        # Drain merges serially (main thread). The on_done callback clears
+        # the pending_merge bookkeeping so reap_orphans no longer protects.
+        merge_mod.drain_queue(
+            _merge_q, cfg.project_dir, cfg.backend, cfg.harness_home,
+            on_done=_pool.unmark_pending_merge,
+        )
 
         if cfg.once:
             # In --once: wait for the one spawned worker to finish + merge, then exit.
@@ -290,9 +328,12 @@ def run(cfg: RuntimeConfig) -> int:
             if not spawned_any:
                 log.info("queue empty (or budget locked)")
                 return 0
-            if _pool.busy_count() == 0:
-                # workers all done; drain any final merges
-                merge_mod.drain_queue(_merge_q, cfg.project_dir, cfg.backend, cfg.harness_home)
+            if not _pool.has_work():
+                # workers all done AND no merge still pending; drain residual + exit
+                merge_mod.drain_queue(
+                    _merge_q, cfg.project_dir, cfg.backend, cfg.harness_home,
+                    on_done=_pool.unmark_pending_merge,
+                )
                 return 0
 
         if _shutdown.is_set():
@@ -300,7 +341,7 @@ def run(cfg: RuntimeConfig) -> int:
             time.sleep(0.2)
             continue
 
-        if _pool.busy_count() == 0:
+        if not _pool.has_work():
             log.info("queue empty (or budget locked)")
             time.sleep(5)
         else:

@@ -48,6 +48,15 @@ export HARNESS_WORKTREE="$ADAPTER_WORKTREE"
 [[ -n "$ADAPTER_TASK_ID" ]] && export HARNESS_TASK_ID="$ADAPTER_TASK_ID"
 
 _count_files_changed() {
+  # 数本 worker 分支自 main 分叉以来动过的文件。worker 在 worktree 内会 git commit，
+  # 所以 `git diff HEAD` 在 commit 后归零；这里改取 base..HEAD（branch 视角全量改动）。
+  local base
+  for ref in main master; do
+    if base=$(git merge-base HEAD "$ref" 2>/dev/null); then
+      git diff --name-only "$base"..HEAD 2>/dev/null | wc -l | tr -d ' '
+      return
+    fi
+  done
   git diff --name-only HEAD 2>/dev/null | wc -l | tr -d ' '
 }
 
@@ -76,6 +85,12 @@ _log_raw() {
 if [[ -n "${HARNESS_MOCK_ADAPTER:-}" ]]; then
   prompt=$(cat "$ADAPTER_TASK_FILE")
   fake_sid="${ADAPTER_SESSION_ID:-00000000-0000-0000-0000-000000000001}"
+
+  # 测试钩子：HARNESS_MOCK_SLEEP_S=N 让 mock 在写文件前 sleep N 秒，
+  # 给上层（如 kill -9 续跑测试）留出杀进程的窗口期。
+  if [[ -n "${HARNESS_MOCK_SLEEP_S:-}" ]]; then
+    sleep "$HARNESS_MOCK_SLEEP_S"
+  fi
 
   # 测试钩子：HARNESS_MOCK_BLOCK=1 让 mock 写一份 blocking guidance.json，
   # 模拟 worker 需人工决策。要求 ADAPTER_WORKER_DIR 已传入。

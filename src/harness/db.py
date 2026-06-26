@@ -214,6 +214,13 @@ def query_orphans(threshold_minutes: int, exclude_ids: Optional[list[str]] = Non
     list was empty (loop-top invariant).
 
     Returns rows of (id, status, retries, redispatches, updated).
+
+    Implementation note: we compare via `strftime('%s', ...)` (epoch seconds)
+    rather than string `<`, because `updated` is stored as ISO-8601 with `T`
+    separator and `Z` suffix (e.g. `2026-06-26T03:44:29Z`) while SQLite's
+    `datetime('now', ...)` returns SQL format (e.g. `2026-06-26 03:45:15`).
+    String comparison breaks because `'T' > ' '` lexicographically, causing
+    same-date orphans to evade reap.
     """
     modifier = f"-{int(threshold_minutes)} minutes"
     exclude_ids = exclude_ids or []
@@ -225,7 +232,7 @@ def query_orphans(threshold_minutes: int, exclude_ids: Optional[list[str]] = Non
                 "FROM tasks "
                 "WHERE status IN ('dispatched','working','gating') "
                 f"  AND id NOT IN ({placeholders}) "
-                "  AND updated < datetime('now', ?) "
+                "  AND strftime('%s', updated) < strftime('%s', 'now', ?) "
                 "ORDER BY priority, id"
             )
             rows = c.execute(sql, (*exclude_ids, modifier)).fetchall()
@@ -235,7 +242,7 @@ def query_orphans(threshold_minutes: int, exclude_ids: Optional[list[str]] = Non
                 SELECT id, status, retries, redispatches, updated
                 FROM tasks
                 WHERE status IN ('dispatched','working','gating')
-                  AND updated < datetime('now', ?)
+                  AND strftime('%s', updated) < strftime('%s', 'now', ?)
                 ORDER BY priority, id
                 """,
                 (modifier,),
@@ -249,6 +256,9 @@ def query_blocked_overdue(threshold_hours: int) -> list[tuple]:
     Returns rows of (id, last_blocked_ts).
     """
     modifier = f"-{int(threshold_hours)} hours"
+    # See query_orphans for why we compare via strftime('%s', ...) instead of
+    # raw string `<`: stored `T`/`Z` timestamps don't lex-sort against SQL-format
+    # `datetime('now')`.
     with _connect() as c:
         rows = c.execute(
             """
@@ -258,7 +268,7 @@ def query_blocked_overdue(threshold_hours: int) -> list[tuple]:
             WHERE t.status = 'blocked'
               AND tr.to_state = 'blocked'
             GROUP BY t.id
-            HAVING blocked_since < datetime('now', ?)
+            HAVING strftime('%s', blocked_since) < strftime('%s', 'now', ?)
             ORDER BY blocked_since
             """,
             (modifier,),

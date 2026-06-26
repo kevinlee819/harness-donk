@@ -46,6 +46,9 @@ class WorkerJob:
     mock: bool
     max_retries: int
     merge_queue: "queue.Queue[MergeRequest]"
+    # Called before posting MergeRequest — tells the orchestrator to keep this
+    # task in the reap exclusion set even after the worker thread exits.
+    mark_pending_merge: object = None  # Callable[[str], None] or None
 
 
 class WorkerThread(threading.Thread):
@@ -206,7 +209,10 @@ class WorkerThread(threading.Thread):
             gate_rc = self._run_gate(worktree)
             if gate_rc == 0:
                 log.info("[%s] gate passed", j.worker_id)
-                # Post to main thread for serial merge
+                # Mark pending-merge BEFORE posting; ensures reap exclusion is
+                # in place by the time main thread next runs reap_orphans.
+                if j.mark_pending_merge is not None:
+                    j.mark_pending_merge(j.task_id)
                 j.merge_queue.put(MergeRequest(
                     task_id=j.task_id,
                     worker_id=j.worker_id,
