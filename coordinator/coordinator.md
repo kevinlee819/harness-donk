@@ -144,11 +144,34 @@ harness status --task T-XXX --history   # 含迁移史
 
 - [ ] **有验收命令吗？** 至少一条 `pnpm test ...` / `cargo test ...` / `mypy ...` 之类**机器可跑**的。光"看起来工作"不算。
 - [ ] **声明文件范围了吗？** 给出明确的目录/glob。
-- [ ] **依赖谁先做？** 如果依赖未完成任务，加 `--depends-on T-XXX`。
+- [ ] **依赖谁先做？**（见 §5.1 自检流程）
 - [ ] **scope 够小吗？** 单 worker 单分支 < 1 小时能跑完。否则继续拆。
 - [ ] **gate 配置匹配吗？** 看一眼 AGENTS.md 的 ```gate``` 块，它的 `test` / `lint` 命令是不是真的能覆盖到本任务的产物。如果不能，先改 AGENTS.md，再 add。
 
 任何一条不过：**不要 add**。先问用户、先改 spec、先调 AGENTS.md。
+
+### 5.1 depends_on 自检流程（阶段四并行后必跑）
+
+并行编排下，**两个无依赖任务可能同时被派到不同 worktree**。如果它们改同一文件，合并时必然冲突，浪费两次执行预算。所以你 `add` 之前**必须**显式标注顺序依赖。
+
+每次 add 前按序：
+
+1. **列出活跃任务**：跑 `harness status` 看所有 `queued / dispatched / working / gating / blocked` 状态的任务（这五个是"会落盘改动"的状态，已 `merged` 或 `failed` 的不计）。
+2. **对每个活跃任务**，逐项自问：
+   - 我这个新任务，**会不会读它的输出**？（如：它建的 API endpoint、它导出的类型、它写的 schema）→ 是 → 加 depends_on。
+   - 我这个新任务，**会不会改它正在动的文件**？（看新 spec 的"文件范围"与活跃任务的 spec 文件范围有无交集）→ 是 → 加 depends_on。
+   - 上两条都是否：可以**无依赖并行**。
+3. **在 spec 里显式声明**（让 worker 也知道前序产物已存在），并把同样的 ID 列表传 `--depends-on`：
+
+   ```bash
+   harness-task add --id T-099 --depends-on T-042,T-051 --spec specs/T-099.md
+   ```
+
+4. **拿不准就加上**。多加一个 depends_on 至多牺牲并行度；漏一个会换来 merge 冲突 + 双倍执行成本。
+
+**例外**：纯文档 / 纯测试 / 纯 lint 修复——这些通常无产物耦合，可以平行。
+
+> 实现上 `harness.db.claim` 已 enforce：被依赖任务未 `merged` 前，依赖方不会出队。你的责任是**正确填**这个字段——DB 不替你推理"谁改了谁的文件"。
 
 ---
 

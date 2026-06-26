@@ -220,8 +220,8 @@
 - [x] 修复并发产生的 race：`BEGIN IMMEDIATE` 让 busy_timeout 真正起作用；merge 失败必 `git merge --abort` 防止下次 merge 被脏树污染
 - [x] 验收：4 独立任务并行→全 merged + 合并时序无重叠（test_e2e_parallel 3 case 全绿）
 - [x] 验收：worker 崩溃路径在 thread try/except 内 → task transition FAILED + notify，不污染池内其他 worker
-- [ ] `harness attach <worker>` 选择 tmux pane —— 纯 UX feature，独立小项可后做
-- [ ] 任务拆分依赖检查（spec 模板增 `depends_on` 字段 — 已就位；协调者入队前自检 prompt 待加 coordinator.md）
+- [x] `harness attach <worker_id>` 现场快照（worker 是 Python 线程，非 tmux pane；输出 status.json + worktree + guidance + 最近 adapter call；`--path` 仅打印 worktree 供 cd）+ 5 case 单测
+- [x] 任务拆分依赖检查 — coordinator.md §5.1 加入 depends_on 自检流程（活跃任务清单 → 读写交集判断 → 显式 --depends-on）
 - [ ] 验收：8 独立任务并行吞吐 ≥ 串行 3 倍（用户先收下不验收）
 
 ---
@@ -232,8 +232,8 @@
 - [x] `tests/run.sh` — 测试发现（.sh + .py） + 子进程隔离 + 汇总报告
 - [x] `tests/lib/assert.sh` — eq/neq/match/file/json/exit_code 等断言
 - [x] `tests/lib/setup.sh` — make_fixture_project / set_gate_test_cmd / 自动清理
-- [x] **当前规模：24 文件 / 140+ cases / ~54s 全绿**（阶段四完成）
-   - unit (.sh)：gate 6 / hooks 25 / notification_hook 3 / backup 3 / claude_adapter 6 / codex_adapter 7 / gate_cross_review 8 / events_cli 4
+- [x] **当前规模：25 文件 / 145+ cases / ~52s 全绿**（阶段四完成 + harness attach）
+   - unit (.sh)：attach 5 / gate 6 / hooks 25 / notification_hook 3 / backup 3 / claude_adapter 6 / codex_adapter 7 / gate_cross_review 8 / events_cli 4
    - unit (.py)：atomic_write 5 / budget_python 4 / notify_python 4 / orchestrator_pool 5 / merge_serial 3 / db (含 events / orphan / blocked-overdue / migration drill) 29 / harness_task 11
    - integration (.sh)：e2e_success 2 / e2e_retry_failed 1 / e2e_blocked_resume 2 / e2e_backend_switch 3 / e2e_orphan_reaper 4 / e2e_depends_on 2 / e2e_parallel 3 / init_idempotent 7 / harness_infi 4
 - [x] orchestrator 孤儿任务回收 + BLOCKED 超时（阶段二 #3）

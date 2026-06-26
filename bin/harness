@@ -299,9 +299,20 @@ cmd_attach() {
   [[ ! -f "$cwd/.harness/harness.db" ]] && { echo "not initialized" >&2; exit 1; }
   local hash; hash=$(printf '%s' "$cwd" | shasum -a 256 | cut -c1-8)
 
-  local target="${1:-}"
+  local target="" path_only=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --path) path_only=1; shift ;;
+      *)
+        if [[ -z "$target" ]]; then target="$1"; shift
+        else echo "unknown arg: $1" >&2; exit 1
+        fi
+        ;;
+    esac
+  done
+
   if [[ -z "$target" ]]; then
-    # 默认 attach 到协调者会话
+    # 默认 attach 到协调者 tmux 会话
     local session="harness-$hash"
     if tmux has-session -t "$session" 2>/dev/null; then
       exec tmux attach -t "$session"
@@ -309,10 +320,63 @@ cmd_attach() {
       echo "no coordinator session (run harness-infi first)" >&2
       exit 1
     fi
+  fi
+
+  # worker 模式：阶段四 worker 是 Python 线程，不是独立进程/pane。
+  # 这里给"看现场"快照：status.json + guidance + worktree 路径 + 最近一次 adapter 调用。
+  local wdir="$cwd/.harness/workers/$target"
+  local sjson="$wdir/status.json"
+  if [[ ! -f "$sjson" ]]; then
+    echo "no such worker: $target (no $sjson)" >&2
+    exit 1
+  fi
+
+  local tid stat branch progress sid updated backend
+  tid=$(jq -r '.task_id // "-"'     "$sjson")
+  stat=$(jq -r '.status // "-"'      "$sjson")
+  branch=$(jq -r '.branch // "-"'    "$sjson")
+  progress=$(jq -r '.progress // "-"' "$sjson")
+  sid=$(jq -r '.session_id // "-"'   "$sjson")
+  updated=$(jq -r '.updated // "-"'  "$sjson")
+  backend=$(jq -r '.backend // "-"'  "$sjson")
+
+  local proj_name; proj_name=$(basename "$cwd")
+  local wt="$(dirname "$cwd")/.worktrees/$proj_name/$tid"
+
+  if [[ $path_only -eq 1 ]]; then
+    # 仅打印 worktree 路径，便于 cd "$(harness attach <wid> --path)"
+    [[ -d "$wt" ]] && printf '%s\n' "$wt" && return 0
+    echo "worktree gone: $wt" >&2; exit 2
+  fi
+
+  printf "Worker   : %s\n" "$target"
+  printf "Backend  : %s\n" "$backend"
+  printf "Task     : %s\n" "$tid"
+  printf "Status   : %s\n" "$stat"
+  printf "Branch   : %s\n" "$branch"
+  printf "Progress : %s\n" "$progress"
+  printf "Session  : %s\n" "$sid"
+  printf "Updated  : %s\n" "$updated"
+  if [[ -d "$wt" ]]; then
+    printf "Worktree : %s\n" "$wt"
   else
-    # attach 到具体 worker pane（阶段二实现真正的 worker tmux 后才有意义）
-    echo "worker attach not yet implemented (stage 2)" >&2
-    exit 2
+    printf "Worktree : (gone)\n"
+  fi
+
+  local g="$wdir/guidance.json"
+  if [[ -f "$g" ]]; then
+    echo
+    echo "== Guidance (blocking) =="
+    jq -r '"question: " + (.question // "-") + "\ncontext : " + (.context // "-")' "$g"
+  fi
+
+  local last_log; last_log=$(ls -t "$cwd/.harness/logs/raw/"*"$tid"*.json 2>/dev/null | head -1)
+  if [[ -n "$last_log" ]]; then
+    echo
+    echo "== Last adapter call =="
+    jq -r '"ts      : " + .ts + "\nbackend : " + .backend +
+           "\nresult  : " + ((.response.result // .response.error // "?") | tostring | .[0:200])' \
+       "$last_log" 2>/dev/null || echo "(unparseable)"
   fi
 }
 
@@ -359,14 +423,13 @@ Commands:
   events ack <eid>...     标记事件已交付（避免协调者重复报告）
   backup                  sqlite3 .backup 落到 .harness/backups/
   run-once [--mock]       跑一轮编排器（处理一个任务后退出）
-  attach [<worker_id>]    attach 到 tmux（无参 = 协调者会话）
+  attach                  attach 到协调者 tmux 会话（无参）
+  attach <wid> [--path]   worker 现场快照（worker 是 Python 线程，非独立 pane）；
+                          --path 仅打印 worktree 路径，便于 cd "$(harness attach w1 --path)"
   help                    本帮助
 
 Coordinator entry: harness-infi   (启动协调者对话面)
 Coordinator tool:  harness-task   (在协调者 PATH 中)
-
-Not yet implemented:
-  stop / ls / backup
 EOF
 }
 
