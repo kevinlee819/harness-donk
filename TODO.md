@@ -233,8 +233,8 @@
 - [x] `tests/run.sh` — 测试发现（.sh + .py） + 子进程隔离 + 汇总报告
 - [x] `tests/lib/assert.sh` — eq/neq/match/file/json/exit_code 等断言
 - [x] `tests/lib/setup.sh` — make_fixture_project / set_gate_test_cmd / 自动清理
-- [x] **当前规模：26 文件 / 153+ cases / ~55s 全绿**（+ session_resume_cap + projects.list 登记）
-   - unit (.sh)：attach 5 / gate 6 / hooks 25 / notification_hook 3 / backup 3 / claude_adapter 6 / codex_adapter 7 / gate_cross_review 8 / events_cli 4
+- [x] **当前规模：26 文件 / 163+ cases / ~64s 全绿**（+ codex adapter 修正与硬化）
+   - unit (.sh)：attach 5 / gate 6 / hooks 25 / notification_hook 3 / backup 3 / claude_adapter 6 / codex_adapter 17 / gate_cross_review 8 / events_cli 4
    - unit (.py)：atomic_write 5 / budget_python 4 / notify_python 4 / orchestrator_pool 5 / merge_serial 3 / db (含 events / orphan / blocked-overdue / migration drill / resume cap) 32 / harness_task 11
    - integration (.sh)：e2e_success 2 / e2e_retry_failed 1 / e2e_blocked_resume 2 / e2e_backend_switch 3 / e2e_orphan_reaper 4 / e2e_depends_on 2 / e2e_parallel 3 / e2e_kill_recovery 2 / init_idempotent 8 / harness_infi 4
 - [x] orchestrator 孤儿任务回收 + BLOCKED 超时（阶段二 #3）

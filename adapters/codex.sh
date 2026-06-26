@@ -5,15 +5,19 @@
 # 入参（环境变量）— 与 claude.sh 对齐：
 #   ADAPTER_TASK_FILE     必填，提示词文件
 #   ADAPTER_WORKTREE      必填，工作目录
-#   ADAPTER_SESSION_ID    无意义（codex 不暴露 session id）；非空触发 --last resume
-#   ADAPTER_MAX_TURNS     默认 12（codex 自身没有 turn cap，这里仅记录）
+#   ADAPTER_SESSION_ID    可选；非空触发 resume —— UUID 形态直接传 codex exec resume <uuid>，
+#                         否则降级 --last（按 cwd 取最近会话）。
+#   ADAPTER_MAX_TURNS     默认 12（codex 无 turn cap，这里仅记录，靠 timeout 兜底）
 #   ADAPTER_TIMEOUT       默认 900
 #   ADAPTER_LOG_DIR       原始 JSONL 落盘
 #   ADAPTER_TASK_ID / ADAPTER_WORKER_ID / ADAPTER_WORKER_DIR
 #   ADAPTER_MODEL         传 codex -m
 #   ADAPTER_SANDBOX       read-only / workspace-write / danger-full-access
 #                         默认 workspace-write；review 模式调用方应传 read-only
-#   HARNESS_MOCK_ADAPTER  非空 → mock
+#                         （此时自动 --ephemeral + 关 web_search + 应用 output-schema）
+#   HARNESS_MOCK_ADAPTER  非空 → 走 mock 路径（不调真 codex）
+#   HARNESS_ADAPTER_DRYRUN 非空 → 构造 args 后打印到 stdout（一行一个）+ exit 0，
+#                         不实际调 codex。用于测试 flag 装配是否正确。
 #
 # 出参（stdout 单行 JSON）—— 与 claude.sh 同 schema：
 #   {ok, session_id, result, cost_usd, num_turns, files_changed, duration_ms, error}
@@ -25,12 +29,13 @@ set -uo pipefail
 
 ADAPTER_NAME="codex"
 
-# capability bitmap
-ADAPTER_CAP_SESSION_RESUME=1                   # 经 codex exec resume --last
-ADAPTER_CAP_SESSION_ID_PROGRAMMATIC=0          # 不能拿到 session id
-ADAPTER_CAP_TOOL_PERMISSION=1
-ADAPTER_CAP_COST_REPORT=0                      # JSON 里只有 token 用量，没 USD
-ADAPTER_PARALLEL_PER_WORKTREE=0                # 必须串行
+# capability bitmap（写法须形如 NAME=VALUE 一行，便于 grep；
+# 调用方读 bitmap 决定可派任务类型）
+ADAPTER_CAP_SESSION_RESUME=1                   # codex exec resume <uuid|--last>
+ADAPTER_CAP_SESSION_ID_PROGRAMMATIC=1          # thread_id 从 thread.started 事件可取（codex 0.142+）
+ADAPTER_CAP_TOOL_PERMISSION=1                  # --sandbox + --ask-for-approval
+ADAPTER_CAP_COST_REPORT=0                      # JSON 只给 token usage，无 USD
+ADAPTER_PARALLEL_PER_WORKTREE=0                # 必须串行（避开 git index 竞争）
 
 : "${ADAPTER_TASK_FILE:?ADAPTER_TASK_FILE required}"
 : "${ADAPTER_WORKTREE:?ADAPTER_WORKTREE required}"
@@ -168,13 +173,34 @@ LAST_MSG=$(mktemp -t codex-last.XXXXXX)
 EVENTS=$(mktemp -t codex-events.XXXXXX)
 trap '_release_lock; rm -f "$LAST_MSG" "$EVENTS"' EXIT INT TERM
 
-# 构造命令。重要：clap 解析时 `exec` 的全局选项（特别是 `-C/--cd`）必须
-# 放在 `resume` 子命令之前，否则 `codex exec resume` 直接报 unexpected argument。
-# 已实测：`exec resume --last -C $dir ...` 会 fail。
+# 构造命令。源码学到的几条要点（codex-rs/exec/src/lib.rs 与 cli.rs）：
+#   (1) `exec` 的子命令选项（特别是 `-C/--cd`）必须放在 `resume` 子命令**之前**，
+#       否则 `codex exec resume` 报 unexpected argument。
+#   (2) `codex exec` 在 headless 模式下默认 `approval_policy = AskForApproval::Never`
+#       （lib.rs:426 注释 "Default to never ask for approvals in headless mode"），
+#       所以无需也无法通过 exec 传 `-a/--ask-for-approval`（它是 TuiCli 的字段，
+#       `inherit_exec_root_options` 不会传给 exec）。
+#   (3) **绝不**用 `--dangerously-bypass-approvals-and-sandbox`：lib.rs:294 显示它会
+#       强制 sandbox_mode = SandboxMode::DangerFullAccess，覆盖我们传的 `-s`。
+#       此前版本两个 flag 同时传，实际跑的是 DangerFullAccess —— worktree 写区
+#       限制被静默废掉，等于把 codex 完全放飞。这是真实安全 bug。
 _args=(exec -C "$ADAPTER_WORKTREE" --json -s "$ADAPTER_SANDBOX"
-       --dangerously-bypass-approvals-and-sandbox -o "$LAST_MSG"
-       --skip-git-repo-check)
+       -o "$LAST_MSG" --skip-git-repo-check)
 [[ -n "$ADAPTER_MODEL" ]] && _args+=(-m "$ADAPTER_MODEL")
+
+# Review 模式（read-only + 非 resume）：
+#   --ephemeral              不持久化 session（review 不需要后续 resume）
+#   --output-schema <file>   翻译到 Responses API 的 `text.format=json_schema,strict=true`
+#                            （codex-api/src/common.rs:313-330）—— 模型**强制**只能输
+#                            出符合 schema 的纯 JSON，无法回 markdown / 解释段。比让
+#                            model 自由发挥再用正则抠 `{...}` 可靠一个量级。
+#   -c web_search="disabled" review 只看 diff 不联网 —— 防注入 + 省钱
+if [[ "$ADAPTER_SANDBOX" == "read-only" && -z "$ADAPTER_SESSION_ID" ]]; then
+  _args+=(--ephemeral)
+  _review_schema="${HARNESS_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/schema/json/review-response.schema.json"
+  [[ -f "$_review_schema" ]] && _args+=(--output-schema "$_review_schema")
+  _args+=(-c 'web_search="disabled"')
+fi
 
 if [[ -n "$ADAPTER_SESSION_ID" ]]; then
   # resume：若 SESSION_ID 是 UUID 就直接传，否则用 --last 取本目录最近一次
@@ -186,9 +212,10 @@ if [[ -n "$ADAPTER_SESSION_ID" ]]; then
   fi
 fi
 
-# review 模式（ADAPTER_SANDBOX=read-only 且非 resume）— 不需要持久化 session
-if [[ "$ADAPTER_SANDBOX" == "read-only" && -z "$ADAPTER_SESSION_ID" ]]; then
-  _args+=(--ephemeral)
+# Dry-run：打印构造好的 args 后 exit 0，不实际调 codex。用于测试 flag 装配。
+if [[ -n "${HARNESS_ADAPTER_DRYRUN:-}" ]]; then
+  printf '%s\n' "${_args[@]}"
+  exit 0
 fi
 
 start_ms=$(python3 -c 'import time;print(int(time.time()*1000))')

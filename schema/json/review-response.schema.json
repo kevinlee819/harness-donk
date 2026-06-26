@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "harness cross-model review response",
+  "description": "Reviewer adapter (claude or codex) must emit exactly this shape when sandbox=read-only. gate.sh parses approve to decide pass/fail and surfaces issues into the retry prompt on reject.",
+  "type": "object",
+  "required": ["approve", "issues"],
+  "properties": {
+    "approve": {
+      "type": "boolean",
+      "description": "true = diff is acceptable to merge; false = at least one blocking issue."
+    },
+    "issues": {
+      "type": "array",
+      "description": "Concrete problems with the diff. Empty when approve=true; required to be non-empty when approve=false.",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "additionalProperties": false
+}
