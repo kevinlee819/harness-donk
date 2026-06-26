@@ -182,7 +182,7 @@ ADAPTER_TASK_FILE=/tmp/p.txt ADAPTER_WORKTREE=/tmp/wt bash adapters/<name>.sh \
 
 | Backend | adapter | 能力位图特点 | 已知坑 |
 |---------|---------|------------|--------|
-| Claude Code | `claude.sh` | 全 ✓ | UUID 必须合法格式 |
+| Claude Code | `claude.sh` | 全 ✓ | UUID 必须合法格式；review 模式（ADAPTER_SANDBOX=read-only）用 `--tools "Read,Grep,Glob" --no-session-persistence --json-schema <schema>`；写模式必须 `--permission-mode bypassPermissions`（非交互会卡权限弹窗） |
 | Codex | `codex.sh` | `COST_REPORT=0`, `PARALLEL_PER_WORKTREE=0` | mkdir lock + thread_id 从 thread.started 事件取（0.142+）；NDJSON 需聚合；`-C` 必须先于 `resume` 子命令；`-a` 不能传给 exec（headless 默认 Never）；**绝不**用 `--dangerously-bypass-approvals-and-sandbox`（会强制 DangerFullAccess 覆盖 `-s`） |
 | OpenCode | `opencode.sh` | 全 ✓ | 用 `opencode run` CLI 路径；**避开** serve 模式（子 agent 挂死历史问题） |
 

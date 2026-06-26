@@ -1,17 +1,26 @@
 #!/usr/bin/env bash
 # Claude Code adapter — 归一化 claude -p 调用
-# 见 docs/interfaces.md §4, docs/adapter-contract.md
+# 见 docs/interfaces.md §4, docs/adapter-contract.md, tmp/claude-doc.md
 #
 # 入参（环境变量）：
 #   ADAPTER_TASK_FILE     必填，提示词文件
 #   ADAPTER_WORKTREE      必填，工作目录
-#   ADAPTER_SESSION_ID    可选，非空则续接
+#   ADAPTER_SESSION_ID    可选 UUID，非空则 --resume
 #   ADAPTER_MAX_TURNS     默认 12
 #   ADAPTER_TIMEOUT       默认 900 秒
 #   ADAPTER_LOG_DIR       原始输出落盘目录（可选）
-#   HARNESS_MOCK_ADAPTER  非空则走 mock（不调真 CLI）
+#   ADAPTER_MODEL         传 claude --model
+#   ADAPTER_SANDBOX       与 codex 对齐的语义信号：
+#                           read-only → review 模式：白名单 Read/Grep/Glob、
+#                                       --json-schema 强制结构化输出、
+#                                       --no-session-persistence 不落盘、
+#                                       --max-turns 4 收紧
+#                           其它/未设 → 写模式：bypassPermissions（hooks 兜底）
+#   HARNESS_MOCK_ADAPTER  非空 → 走 mock 路径（不调真 CLI）
+#   HARNESS_ADAPTER_DRYRUN 非空 → 构造 args 后打印到 stdout（一行一个）+ exit 0，
+#                         不实际调 claude。用于测试 flag 装配是否正确。
 #
-# 出参（stdout 单行 JSON）：
+# 出参（stdout 单行 JSON）—— 与 codex.sh 同 schema：
 #   {ok, session_id, result, cost_usd, num_turns, files_changed, error}
 
 set -euo pipefail
@@ -35,6 +44,7 @@ ADAPTER_TASK_ID="${ADAPTER_TASK_ID:-}"
 ADAPTER_WORKER_ID="${ADAPTER_WORKER_ID:-}"
 ADAPTER_WORKER_DIR="${ADAPTER_WORKER_DIR:-}"
 ADAPTER_MODEL="${ADAPTER_MODEL:-}"
+ADAPTER_SANDBOX="${ADAPTER_SANDBOX:-}"
 
 [[ ! -f "$ADAPTER_TASK_FILE" ]] && { echo "task file not found: $ADAPTER_TASK_FILE" >&2; exit 1; }
 [[ ! -d "$ADAPTER_WORKTREE" ]]  && { echo "worktree not found: $ADAPTER_WORKTREE" >&2; exit 1; }
@@ -133,12 +143,38 @@ if [[ -n "${HARNESS_MOCK_ADAPTER:-}" ]]; then
 fi
 
 # 真实调用
-command -v claude >/dev/null 2>&1 || { echo "claude CLI not found" >&2; exit 1; }
+# Dry-run 时跳过 CLI 存在性检查（测试可在无 claude 环境下跑）
+[[ -z "${HARNESS_ADAPTER_DRYRUN:-}" ]] && {
+  command -v claude >/dev/null 2>&1 || { echo "claude CLI not found" >&2; exit 1; }
+}
 
-_args=(--print --output-format json --max-turns "$ADAPTER_MAX_TURNS"
-       --permission-mode bypassPermissions)
+_args=(--print --output-format json --max-turns "$ADAPTER_MAX_TURNS")
+
+# Review 模式（read-only + 非 resume）：白名单只读工具 + 强制 JSON schema +
+# 不持久化 session。tmp/claude-doc.md §"CLI flags":
+#   --tools "Read,Grep,Glob"       仅允许只读导航工具，禁 Edit/Write/Bash/Web*
+#   --json-schema <schema-string>  强制 final output 符合 schema（结构化输出，
+#                                  比让 model 在 markdown 里夹 JSON 块靠谱一档）
+#   --no-session-persistence       review 一次性用，不写盘也不可 resume
+#   bypassPermissions 不传：只读工具不会触发权限提示，不需要它
+if [[ "$ADAPTER_SANDBOX" == "read-only" && -z "$ADAPTER_SESSION_ID" ]]; then
+  _review_schema="${HARNESS_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/schema/json/review-response.schema.json"
+  _args+=(--tools "Read,Grep,Glob" --no-session-persistence)
+  [[ -f "$_review_schema" ]] && _args+=(--json-schema "$(cat "$_review_schema")")
+else
+  # 写模式：hooks 兜底（PreToolUse 安全门），bypassPermissions 让非交互调用
+  # 不被工具权限弹窗卡住（CLAUDE.md §4.7 "硬约束放 hooks 不放提示词"）
+  _args+=(--permission-mode bypassPermissions)
+fi
+
 [[ -n "$ADAPTER_SESSION_ID" ]] && _args+=(--resume "$ADAPTER_SESSION_ID")
 [[ -n "$ADAPTER_MODEL" ]]      && _args+=(--model "$ADAPTER_MODEL")
+
+# Dry-run：打印构造好的 args 后 exit 0，不实际调 claude。用于测试 flag 装配。
+if [[ -n "${HARNESS_ADAPTER_DRYRUN:-}" ]]; then
+  printf '%s\n' "${_args[@]}"
+  exit 0
+fi
 
 start_ms=$(python3 -c 'import time;print(int(time.time()*1000))')
 
