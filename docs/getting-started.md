@@ -39,6 +39,10 @@
 | `python3` | ≥ 3.9 | 跑 src/harness/ Python 层 |
 | `uv` | 任意新版 | Python 环境管理（[安装](https://github.com/astral-sh/uv)） |
 
+**可选**：
+
+- `terminal-notifier`（macOS only）—— 让通知中心显示 🫏 donk logo 而不是默认的灰色插头图标，并把同一任务的连续通知合并而非堆积。装：`brew install terminal-notifier`。没装也能跑，只是图标会丑一点。
+
 **至少一个 backend CLI**（任选其一上手，后续可加）：
 
 - Claude Code: 装好并 `claude /login` 完成认证

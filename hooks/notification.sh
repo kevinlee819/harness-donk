@@ -12,9 +12,12 @@
 #   budget_exceeded）。task_completed 通常静默——协调者下次查询时知道即可。
 #
 # 平台：
-#   - macOS: osascript display notification
-#   - 其他: 写一条 log 到 .harness/logs/notify.log
+#   - macOS 优先用 terminal-notifier（可显示 donk logo + 同任务通知合并）
+#     fallback osascript display notification（显示一个通用插头图标，因为
+#     osascript 没有 app bundle，是 macOS 已知限制不是 bug）
+#   - 其他系统：写一条 log 到 .harness/logs/notify.log
 #
+# 装 terminal-notifier：brew install terminal-notifier
 # 用户可改写本文件接入自家 webhook / 飞书 / Slack / 桌面通知。
 
 set -uo pipefail
@@ -43,12 +46,20 @@ if [[ -f "$path" ]]; then
   esac
 fi
 
-# macOS 桌面通知
-if [[ "$(uname)" == "Darwin" ]] && command -v osascript >/dev/null 2>&1; then
-  # 转义 osascript 字符串里的引号
-  esc_body=${body//\"/\\\"}
-  esc_title=${title//\"/\\\"}
-  osascript -e "display notification \"$esc_body\" with title \"$esc_title\"" >/dev/null 2>&1 || true
+# macOS 桌面通知：优先 terminal-notifier 带 donk logo + 同任务合并；
+# 否则降级 osascript（生效但是个通用图标）
+if [[ "$(uname)" == "Darwin" ]]; then
+  donk_icon="$HARNESS_HOME/docs/donk.png"
+  if command -v terminal-notifier >/dev/null 2>&1; then
+    # -group 让同 task 的多条通知合并而不堆积；-appIcon 显示 donk 像素驴
+    _tn_args=(-title "$title" -message "$body" -group "harness-$tid")
+    [[ -f "$donk_icon" ]] && _tn_args+=(-appIcon "$donk_icon")
+    terminal-notifier "${_tn_args[@]}" >/dev/null 2>&1 || true
+  elif command -v osascript >/dev/null 2>&1; then
+    esc_body=${body//\"/\\\"}
+    esc_title=${title//\"/\\\"}
+    osascript -e "display notification \"$esc_body\" with title \"$esc_title\"" >/dev/null 2>&1 || true
+  fi
 fi
 
 # 永远写一条本地 log（便于无桌面环境也能追溯）
