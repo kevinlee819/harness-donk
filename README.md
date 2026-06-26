@@ -24,18 +24,22 @@
 ## 快速开始
 
 ```bash
-# 1. 装
-git clone <repo-url> ~/tools/harness && cd ~/tools/harness && uv sync
-export PATH="$HOME/tools/harness/bin:$PATH"
+# 1. 装（一行；自动检系统依赖 / 自动装 uv / 自动设 PATH）
+curl -LsSf https://raw.githubusercontent.com/USER/harness/main/install.sh | bash
 
-# 2. 自检
-harness setup && harness doctor
+# 或：已 clone 的情况
+git clone https://github.com/USER/harness.git && cd harness && ./install.sh
+
+# 2. 自检 backend（真烧少量 API）
+harness doctor
 
 # 3. 接管项目
 cd ~/code/my-project
-harness init             # 填 AGENTS.md 里的 gate 命令
+harness init             # 生成 AGENTS.md（编辑顶部 gate 配置：test/lint/build 命令）
 harness-infi             # 启动协调者，开始干活
 ```
+
+> installer 默认装到 `$HOME/.harness/`，入口符号链接到 `$HOME/.local/bin/`。改路径用 `--prefix` / `--bindir`，卸载用 `--uninstall`。
 
 详细安装、配置、使用、排障 → **[docs/getting-started.md](docs/getting-started.md)**。
 

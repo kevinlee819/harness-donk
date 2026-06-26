@@ -190,7 +190,7 @@ harness help                       # 帮助
 
 **操作系统**：macOS / Linux（暂未在 Windows 测过；WSL 应该能跑）。
 
-**必装命令**（`harness setup` 会校验）：
+**必装命令**（`install.sh` 会校验，缺则报错告诉你装哪个）：
 
 | 命令 | 最低版本 | 作用 |
 |------|---------|------|
@@ -199,7 +199,8 @@ harness help                       # 帮助
 | `jq` | 任意 | JSON 处理 |
 | `tmux` | 任意 | 协调者会话承载 |
 | `python3` | ≥ 3.9 | 跑 `src/harness/` Python 层 |
-| `uv` | 任意新版 | Python 环境管理（[安装](https://github.com/astral-sh/uv)） |
+
+`uv`（Python 环境管理）**不在必装清单里** —— installer 会检测，若缺会问你要不要自动用官方脚本装上（`curl -LsSf https://astral.sh/uv/install.sh | sh`）。
 
 **可选**：
 
@@ -216,27 +217,63 @@ harness help                       # 帮助
 
 ## 4. 安装
 
+两种方式，二选一。
+
+### 4.1 一行装（推荐，仓库公开后可用）
+
 ```bash
-# 1. 克隆到工具目录（不要放进任何项目目录！）
-git clone <repo-url> ~/tools/harness
-cd ~/tools/harness
+curl -LsSf https://raw.githubusercontent.com/USER/harness/main/install.sh | bash
+```
 
-# 2. 同步 Python 环境（建 .venv/、装 console scripts）
-uv sync
+或带交互（让你过目每一步确认）：
 
-# 3. 把 bin/ 加入 PATH
-echo 'export PATH="$HOME/tools/harness/bin:$PATH"' >> ~/.zshrc   # 或 .bashrc
-exec $SHELL                                                       # 重启 shell
+```bash
+curl -LsSf https://raw.githubusercontent.com/USER/harness/main/install.sh -o /tmp/install.sh
+bash /tmp/install.sh
+```
 
-# 4. 验证
-which harness         # → $HOME/tools/harness/bin/harness
-which harness-infi    # → $HOME/tools/harness/bin/harness-infi
+### 4.2 已 clone 的情况
+
+```bash
+git clone https://github.com/USER/harness.git
+cd harness
+./install.sh
+```
+
+### 4.3 installer 做了什么
+
+1. **检查系统依赖**：`git` / `sqlite3 ≥ 3.35` / `jq` / `tmux` / `python3 ≥ 3.9` 缺一就报错告诉你装哪个。
+2. **检查 uv**：缺则问要不要用官方脚本自动装。
+3. **定位源码**：本地模式 → 用你 clone 的目录；一行装模式 → 自动 `git clone` 到 `$HOME/.harness/`。
+4. **`uv sync`**：在源码目录里装 Python 依赖到 `.venv/`。
+5. **入口符号链接**：把 `harness` 和 `harness-infi` 软链到 `$HOME/.local/bin/`（uv 自己也装在这；如果该目录不在 PATH，installer 会问要不要写进 shell rc）。
+6. **`harness setup`**：建 `~/.config/harness/` 写默认全局配置。
+
+### 4.4 installer 选项
+
+```bash
+./install.sh --help              # 看所有选项
+./install.sh -y                  # 跳过所有确认（CI / 一行装常用）
+./install.sh --prefix /opt/harness   # 改源码安装目录（默 $HOME/.harness）
+./install.sh --bindir /usr/local/bin # 改入口符号链接目录（默 $HOME/.local/bin）
+./install.sh --uninstall         # 反向操作：删符号链接 + shell rc 行 +（可选）源码目录
+```
+
+### 4.5 升级 / 卸载
+
+```bash
+# 升级
+cd $HOME/.harness && git pull && uv sync
+
+# 卸载
+bash $HOME/.harness/install.sh --uninstall
 ```
 
 **目录心智模型**（同 git）：
-- `~/tools/harness/` 是工具本体，装一份，**永远不复制进任何项目**。
+- `$HOME/.harness/` 是工具本体，装一份，**永远不复制进任何项目**。
+- 入口 `harness` / `harness-infi` 在 `$HOME/.local/bin/`（uv 也装在这；大多数现代系统已经在 PATH 上）。
 - 项目里只出现声明式的 `AGENTS.md` / `.claude/settings.json` / `specs/`（进 git）+ 运行时状态 `.harness/`（整体 gitignore）。
-- 升级 harness = 在工具目录 `git pull`，所有接管的项目即刻生效。
+- 升级 harness = 在 `$HOME/.harness` 里 `git pull && uv sync`，所有接管的项目即刻生效。
 
 ---
 
