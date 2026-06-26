@@ -318,6 +318,31 @@ def get_session(task_id: str, backend: str) -> Optional[str]:
     return row[0] if row else None
 
 
+def get_resume_count(task_id: str, backend: str) -> int:
+    """Number of resumes performed on this (task, backend) session. 0 if no row."""
+    with _connect() as c:
+        row = c.execute(
+            "SELECT resume_count FROM sessions WHERE task_id=? AND backend=?",
+            (task_id, backend),
+        ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def reset_session(task_id: str, backend: str) -> None:
+    """Drop the session row so the next register_session starts fresh (resume_count=0).
+
+    Called by the worker when `resume_count >= session_resume_cap` (design §7.1):
+    long sessions accumulate context and risk drift, so we cap resumes and let
+    the next adapter call run without `--resume`, getting a fresh session.
+    Code progress is already on disk via git commits, so 'checkpoint' is implicit.
+    """
+    with _connect() as c:
+        c.execute(
+            "DELETE FROM sessions WHERE task_id=? AND backend=?",
+            (task_id, backend),
+        )
+
+
 def log_call(
     task_id: str,
     worker_id: str,

@@ -104,6 +104,38 @@ class DbTestCase(unittest.TestCase):
         db.register_session("T-S", "claude", "sid-2")
         self.assertEqual("sid-2", db.get_session("T-S", "claude"))
 
+    def test_resume_count_starts_zero_and_increments(self):
+        db.add_task("T-RC", "s.md")
+        self.assertEqual(0, db.get_resume_count("T-RC", "claude"))
+        db.register_session("T-RC", "claude", "sid-a")
+        self.assertEqual(0, db.get_resume_count("T-RC", "claude"))
+        db.register_session("T-RC", "claude", "sid-a")
+        self.assertEqual(1, db.get_resume_count("T-RC", "claude"))
+        db.register_session("T-RC", "claude", "sid-a")
+        self.assertEqual(2, db.get_resume_count("T-RC", "claude"))
+
+    def test_reset_session_clears_row(self):
+        db.add_task("T-RS", "s.md")
+        db.register_session("T-RS", "claude", "sid-x")
+        db.register_session("T-RS", "claude", "sid-x")  # rc=1
+        self.assertEqual(1, db.get_resume_count("T-RS", "claude"))
+        db.reset_session("T-RS", "claude")
+        self.assertEqual(0, db.get_resume_count("T-RS", "claude"))
+        self.assertIsNone(db.get_session("T-RS", "claude"))
+        # Next register starts fresh from rc=0
+        db.register_session("T-RS", "claude", "sid-y")
+        self.assertEqual(0, db.get_resume_count("T-RS", "claude"))
+        self.assertEqual("sid-y", db.get_session("T-RS", "claude"))
+
+    def test_reset_session_only_affects_one_backend(self):
+        db.add_task("T-RM", "s.md")
+        db.register_session("T-RM", "claude", "sid-c")
+        db.register_session("T-RM", "codex", "sid-x")
+        db.reset_session("T-RM", "claude")
+        # codex side untouched
+        self.assertEqual("sid-x", db.get_session("T-RM", "codex"))
+        self.assertIsNone(db.get_session("T-RM", "claude"))
+
     # ── calls / cost ──
     def test_log_call_and_today_cost(self):
         db.add_task("T-C", "s.md")

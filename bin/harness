@@ -66,6 +66,15 @@ cmd_init() {
     echo "WARNING: .claude/settings.json exists; suggested hooks written to .claude/settings.json.harness-suggested — merge manually" >&2
   fi
 
+  # 登记到 ~/.config/harness/projects.list（design §10.3）— 幂等
+  local conf_dir="${HARNESS_CONFIG_DIR:-$HOME/.config/harness}"
+  mkdir -p "$conf_dir"
+  local plist="$conf_dir/projects.list"
+  touch "$plist"
+  if ! grep -qxF "$cwd" "$plist"; then
+    echo "$cwd" >> "$plist"
+  fi
+
   echo "harness initialized in $cwd"
   echo "next: edit AGENTS.md to fill gate commands (test/lint/build)"
 }

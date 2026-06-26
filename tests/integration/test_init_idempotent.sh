@@ -132,4 +132,35 @@ test_init_default_backend_keeps_codex_reviewer() {
   assert_contains "codex" "$line" "default (claude writer) → codex reviewer"
 }
 
+test_init_registers_project_in_global_projects_list() {
+  local d; d=$(make_tmp_dir); track_cleanup "$d"
+  local confd="$d/conf"
+  export HARNESS_CONFIG_DIR="$confd"
+  mkdir -p "$d/proj"
+  (
+    cd "$d/proj"
+    git init -q
+    git config user.email t@t
+    git config user.name t
+    git config commit.gpgsign false
+    echo init > r
+    git add . && git commit -qm i
+  )
+
+  (cd "$d/proj" && "$HARNESS_HOME/bin/harness" init >/dev/null 2>&1)
+
+  local plist="$confd/projects.list"
+  assert_file_exists "$plist" "projects.list created"
+  local proj_real; proj_real=$(cd "$d/proj" && pwd)
+  local n; n=$(grep -cxF "$proj_real" "$plist")
+  assert_eq "1" "$n" "project registered exactly once"
+
+  # 第二次 init（已 initialized）不应重复登记
+  (cd "$d/proj" && "$HARNESS_HOME/bin/harness" init >/dev/null 2>&1)
+  n=$(grep -cxF "$proj_real" "$plist")
+  assert_eq "1" "$n" "second init does not duplicate"
+
+  unset HARNESS_CONFIG_DIR
+}
+
 run_tests

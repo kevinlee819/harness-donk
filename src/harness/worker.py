@@ -153,8 +153,23 @@ class WorkerThread(threading.Thread):
         """
         j = self.job
         retries = db.get_retries(j.task_id)
+        # design §7.1: cap resumes per session to prevent context drift on long tasks
+        from harness.config import read_config
+        resume_cap = int(read_config("session_resume_cap", "6"))
 
         while True:
+            # Session cap: if we've resumed too many times, drop the session and
+            # let adapter start fresh. Code progress is already on disk via the
+            # worker's git commits, so 'checkpoint' is implicit.
+            if sid:
+                rc = db.get_resume_count(j.task_id, j.backend)
+                if rc >= resume_cap:
+                    log.info("[%s] session resume cap reached (rc=%d ≥ %d) — "
+                             "dropping session, next call starts fresh",
+                             j.worker_id, rc, resume_cap)
+                    db.reset_session(j.task_id, j.backend)
+                    sid = ""
+
             log.info("[%s] call %s adapter (task=%s retries=%d)",
                      j.worker_id, j.backend, j.task_id, retries)
             resp = adapter_call(

@@ -191,7 +191,7 @@ sqlite3 .harness/harness.db "UPDATE tasks
 配置于项目 `.claude/settings.json`:
 
 1. **PreToolUse = 确定性安全门**。matcher `Bash`,检查 `tool_input.command`,命中危险模式 exit 2 拦截。拦截原因必须写 stderr(写 stdout 模型收不到反馈)。
-2. **Stop = 完成度强制**。校验清单未全绿即 exit 2 / `decision:"block"`,迫使 agent 继续——任务内自驱动由此内建。
+2. **Stop hook**(完成度强制):**当前不实装**。原设计意图是用 Stop 在 worker 退出时强制完成度(未全绿即 block 迫使继续),但实现后发现与既有机制冗余:gate.sh 是完成度的权威 + 不过则错误回灌 + retries 封顶;PreToolUse 已覆盖越界写。Stop hook 上下文比 gate 弱,且强逼不退会爆 token 预算。详见 [hooks/stop.md](../hooks/stop.md)。阶段四并行 worker 出现真实病例时再重评。
 3. **Notification = 信号线**。事件路由到协调者 / 通知渠道,免去空转轮询。
 
 禁令:硬策略不得用 HTTP hook(非 2xx 为非阻塞错误,网络抖动即旁路安全门),一律用 command hook。
@@ -232,14 +232,19 @@ sqlite3 .harness/harness.db "UPDATE tasks
 ~/tools/harness/                  # ① 工具本体(装一次,bin/ 进 PATH,永不复制)
 ├── bin/
 │   ├── harness-infi              #    入口命令:以协调者配置启动 Claude Code 会话
-│   └── harness                   #    管理/观测命令(status / attach / stop …)
-├── orchestrator.sh               #    执行平面 dumb loop
-├── coordinator/                  #    协调者武装:system prompt、AGENTS 片段、脚本工具
-│   ├── tools/harness-task        #      协调者可调:add / query(读写 harness.db)
+│   └── harness                   #    管理/观测命令(status / attach / events / backup …)
+├── orchestrator.sh               #    执行平面入口(7 行 shim,exec 到 Python 主体)
+├── coordinator/                  #    协调者武装:system prompt + 脚本工具
+│   ├── tools/harness-task        #      协调者可调:add / query / answer / cancel / history
 │   └── coordinator.md            #      协调者角色与打扰策略提示
-├── adapters/                     #    claude.sh / codex.sh / opencode.sh
-├── lib/                          #    atomic_write.sh / gate.sh / budget.sh
-└── templates/                    #    AGENTS.md 模板、hooks 模板、gitignore 片段
+├── adapters/                     #    claude.sh / codex.sh (opencode 暂未做)
+├── src/harness/                  #    Python 层:碰 SQL / 状态机 / 并发的部分
+│   ├── db.py                     #      SQLite 短连接 + 真参数化
+│   ├── orchestrator.py + worker.py + merge.py   # 并行 worker 池 + 串行合并
+│   ├── adapter.py notify.py budget.py config.py atomic_write.py
+│   └── cli/{harness_task,db_cli,orchestrator_cli}.py   # console scripts
+├── lib/                          #    残留 bash:gate.sh + python_env.sh
+└── templates/                    #    AGENTS.md 模板、settings.json 模板、gitignore 片段
 
 ~/.config/harness/                # ② 全局配置(每台机器一份)
 ├── config                        #    全局日预算、通知渠道凭据
@@ -306,7 +311,7 @@ SQLite 层(编排器独占写):
 
 - PreToolUse 安全门拦截清单(初始):`push --force`、`rm -rf` 于 worktree 外、写 `.harness/` 中非本 worker 目录、读写含 `prod`/`secret` 路径、`git merge`/`git push` 主分支。
 - 拦截输出 stderr + exit 2;常见错误是写 stdout 导致模型收不到反馈。
-- Stop hook 检查任务清单与门状态,未完成即 block。
+- Stop hook 当前不实装(完成度由 gate.sh + 错误回灌覆盖,详见 §4.3 与 hooks/stop.md)。
 - 硬策略只用 command hook,不用 HTTP hook。
 
 ### 7.6 成本与可观测
@@ -358,7 +363,10 @@ SQLite 层(编排器独占写):
 协调者与执行 agent 的全过程默认不展示给你。需要了解时,两种粒度:
 
 - **快照式**(默认够用):`harness status` 查 `.harness/harness.db`,一屏给出每个任务状态、各 agent 当前 progress、今日花费。结构化真相,无需你解读屏幕。
-- **现场式**(想深看时):`harness attach` 接入执行平面 tmux,实时看某 agent 的 pane;看完 detach,车间继续转。
+- **现场式**:
+  - `harness attach`(无参):进入协调者 tmux 会话(harness-infi 启动的 window 0)。
+  - `harness attach <worker_id>`(如 `w1`、`w2`):**worker 现场快照** — 阶段四后 worker 是编排器进程内的 Python 线程,不再是独立 tmux pane;此命令输出该 worker 当前 status.json、worktree 路径、若有 blocking guidance 也一并打印、最近一次 adapter 调用摘要。
+  - `harness attach <worker_id> --path`:仅打印 worktree 路径,便于 `cd "$(harness attach w1 --path)"` 进现场看 git 状态。
 
 ### 10.3 一次性环境搭建(每台机器)
 

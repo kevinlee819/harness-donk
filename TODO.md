@@ -113,6 +113,7 @@
 
 ### 其他
 - [x] `bin/harness setup` — 校验 sqlite3 ≥ 3.35 / jq / git / tmux / python；建 `~/.config/harness/{config,projects.list}`
+- [x] `bin/harness init` 登记项目到 `~/.config/harness/projects.list`（幂等，design §10.3）— 为后续多项目全局预算聚合铺路
 - [x] `bin/harness doctor` — 各 backend echo 自检（真调一次 claude）
 - [x] `bin/harness attach` — 默认 attach 协调者会话；worker pane 阶段二
 - [x] adapter 原始日志 envelope 加 task_id / worker_id / prompt_path（替代独立 lib/log.sh）
@@ -232,10 +233,10 @@
 - [x] `tests/run.sh` — 测试发现（.sh + .py） + 子进程隔离 + 汇总报告
 - [x] `tests/lib/assert.sh` — eq/neq/match/file/json/exit_code 等断言
 - [x] `tests/lib/setup.sh` — make_fixture_project / set_gate_test_cmd / 自动清理
-- [x] **当前规模：26 文件 / 147+ cases / ~55s 全绿**（kill -9 续跑 + race fix 后）
+- [x] **当前规模：26 文件 / 153+ cases / ~55s 全绿**（+ session_resume_cap + projects.list 登记）
    - unit (.sh)：attach 5 / gate 6 / hooks 25 / notification_hook 3 / backup 3 / claude_adapter 6 / codex_adapter 7 / gate_cross_review 8 / events_cli 4
-   - unit (.py)：atomic_write 5 / budget_python 4 / notify_python 4 / orchestrator_pool 5 / merge_serial 3 / db (含 events / orphan / blocked-overdue / migration drill) 29 / harness_task 11
-   - integration (.sh)：e2e_success 2 / e2e_retry_failed 1 / e2e_blocked_resume 2 / e2e_backend_switch 3 / e2e_orphan_reaper 4 / e2e_depends_on 2 / e2e_parallel 3 / e2e_kill_recovery 2 / init_idempotent 7 / harness_infi 4
+   - unit (.py)：atomic_write 5 / budget_python 4 / notify_python 4 / orchestrator_pool 5 / merge_serial 3 / db (含 events / orphan / blocked-overdue / migration drill / resume cap) 32 / harness_task 11
+   - integration (.sh)：e2e_success 2 / e2e_retry_failed 1 / e2e_blocked_resume 2 / e2e_backend_switch 3 / e2e_orphan_reaper 4 / e2e_depends_on 2 / e2e_parallel 3 / e2e_kill_recovery 2 / init_idempotent 8 / harness_infi 4
 - [x] orchestrator 孤儿任务回收 + BLOCKED 超时（阶段二 #3）
 - [x] adapter 单测：claude.sh 错误路径 + mock 全分支（6 case）；codex.sh resume by UUID mock 验证（7 case）
 - [x] **tests/manual/** 目录建立 — 真模型 smoke（claude / codex / cross_review / coordinator 4 个脚本 + README）；不进 run.sh
@@ -254,7 +255,7 @@
 - [-] **预算默认值**：`budget_daily_usd=10 USD` 用户默认收下；长跑后再校
 - [-] **死 worker 阈值**：`dead_worker_threshold_min=10` 用户默认收下；codex 单 turn 1-2 分钟，10min 安全
 - [-] **BLOCKED 超时**：`blocked_timeout_hours=72` 用户默认收下；个人用足够
-- [-] **session_resume_cap**：默认 6 轮收下；真实长跑后校准
+- [x] **session_resume_cap**：实装强制 — worker._drive 在 adapter 调用前查 `resume_count >= cap` 则 reset_session + sid="" 强制开新会话（design §7.1）。代码 commit 已在每轮做了，checkpoint 部分天然满足。db 加 `get_resume_count` / `reset_session` + 4 单测
 - [x] **reviewer 默认值**：`harness init --backend <writer>` 自动反转 reviewer（claude↔codex），生成者-裁判分离原则保持默认设置即满足
 - [ ] **跨模型审查 cost 记账**：codex `cost_usd=null` + gate.sh 不写 calls 表，跨模型工作流的成本完全不可见。token-based 估算还是单独 reviews 表？（用户说先不管）
 
