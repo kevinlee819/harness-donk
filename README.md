@@ -1,4 +1,10 @@
+<p align="center">
+  <img src="docs/donk.png" alt="harness — a pixel-art donkey wearing a harness" width="160">
+</p>
+
 # harness — 多 Agent 自驱动编码 Harness
+
+> 🫏 像驯一头会写代码的驴 —— 你说要去哪，它驮着活儿去；过了门才算到，没过自己回头再来。
 
 个人级、单机运行的编码自动化工具。`harness-infi` 启动一个"协调者" Claude Code 会话作为唯一对话面；后台 dumb-loop 编排器取任务、起 worktree、调真正干活的 agent（Claude / Codex），跑校验门，过了才合并主分支。失败自动回灌重跑，需要决策时主动找你。
 

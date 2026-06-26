@@ -1,4 +1,8 @@
-# 开始使用 harness
+<p align="center">
+  <img src="donk.png" alt="harness — a pixel-art donkey wearing a harness" width="140">
+</p>
+
+# 🫏 开始使用 harness
 
 本指南面向第一次使用 harness 的人。读完应能：装好工具、接管一个项目、用协调者派出第一个真任务、看懂日常的对话/委派/观测三档怎么用。
 
