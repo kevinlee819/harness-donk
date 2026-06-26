@@ -93,7 +93,7 @@ cat > "$orch_launcher" <<EOF
 set -uo pipefail
 export HARNESS_HOME='$HARNESS_HOME'
 cd '$cwd'
-echo "🫏 harness — multi-agent self-driving coding harness"
+echo "🫏 harness-donk — multi-agent self-driving coding harness"
 echo "─────────────────────────────────────────────────────"
 echo "[infi] orchestrator daemon starting (backend=$BACKEND model=${MODEL:-default})"
 echo "[infi] cwd=$cwd  log=.harness/logs/raw/"

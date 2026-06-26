@@ -222,21 +222,21 @@ harness help                       # 帮助
 ### 4.1 一行装（推荐，仓库公开后可用）
 
 ```bash
-curl -LsSf https://raw.githubusercontent.com/USER/harness/main/install.sh | bash
+curl -LsSf https://raw.githubusercontent.com/USER/harness-donk/main/install.sh | bash
 ```
 
 或带交互（让你过目每一步确认）：
 
 ```bash
-curl -LsSf https://raw.githubusercontent.com/USER/harness/main/install.sh -o /tmp/install.sh
+curl -LsSf https://raw.githubusercontent.com/USER/harness-donk/main/install.sh -o /tmp/install.sh
 bash /tmp/install.sh
 ```
 
 ### 4.2 已 clone 的情况
 
 ```bash
-git clone https://github.com/USER/harness.git
-cd harness
+git clone https://github.com/USER/harness-donk.git
+cd harness-donk
 ./install.sh
 ```
 

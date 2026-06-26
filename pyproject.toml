@@ -3,9 +3,9 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "harness"
+name = "harness-donk"
 version = "0.1.0"
-description = "Multi-agent self-driving coding harness — Python parts (DB layer, coordinator tools)"
+description = "harness-donk — Multi-agent self-driving coding harness. Python module is still `harness` (package distribution name differs to avoid PyPI collision)."
 requires-python = ">=3.9"
 dependencies = []
 

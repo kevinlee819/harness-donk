@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-本项目是「多 Agent 自驱动编码 Harness」的实现仓库。本文件是 Claude 在本仓库开发时的速查；完整文档在 [docs/](docs/)。
+本项目（**harness-donk**，命令仍叫 `harness` / `harness-infi`）是「多 Agent 自驱动编码 Harness」的实现仓库。本文件是 Claude 在本仓库开发时的速查；完整文档在 [docs/](docs/)。
 
 | 想了解 | 看 |
 |--------|----|

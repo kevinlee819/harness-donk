@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# harness installer — 同时支持两种调用方式：
+# harness-donk installer — 同时支持两种调用方式：
 #
 #   本地（已 clone）：
-#     git clone https://github.com/USER/harness.git
-#     cd harness && ./install.sh
+#     git clone https://github.com/USER/harness-donk.git
+#     cd harness-donk && ./install.sh
 #
 #   一行装（curl|bash，仓库公开后）：
-#     curl -LsSf https://raw.githubusercontent.com/USER/harness/main/install.sh | bash
+#     curl -LsSf https://raw.githubusercontent.com/USER/harness-donk/main/install.sh | bash
 #
 # 默认行为（无参数）：
 #   1. 检测系统依赖（git/sqlite≥3.35/jq/tmux/python3）→ 缺则报错退出
@@ -28,7 +28,7 @@
 set -euo pipefail
 
 # ── 默认值（可被命令行/env 覆盖）──────────────────────────
-HARNESS_REPO_URL="${HARNESS_REPO_URL:-https://github.com/USER/harness.git}"
+HARNESS_REPO_URL="${HARNESS_REPO_URL:-https://github.com/USER/harness-donk.git}"
 HARNESS_HOME="${HARNESS_HOME:-$HOME/.harness}"
 HARNESS_BINDIR="${HARNESS_BINDIR:-$HOME/.local/bin}"
 YES=0
@@ -238,7 +238,7 @@ do_install() {
 
   cat <<EOF
 
-${C_GREEN}${C_BOLD}🫏 安装完成${C_RST}
+${C_GREEN}${C_BOLD}🫏 harness-donk 安装完成${C_RST}
 
 源码：       $src
 入口：       $HARNESS_BINDIR/{harness,harness-infi}

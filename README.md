@@ -2,11 +2,13 @@
   <img src="docs/donk.png" alt="harness — a pixel-art donkey wearing a harness" width="160">
 </p>
 
-# harness — 多 Agent 自驱动编码 Harness
+# harness-donk — 多 Agent 自驱动编码 Harness
 
 > 🫏 像驯一头会写代码的驴 —— 你说要去哪，它驮着活儿去；过了门才算到，没过自己回头再来。
 
 个人级、单机运行的编码自动化工具。`harness-infi` 启动一个"协调者" Claude Code 会话作为唯一对话面；后台 dumb-loop 编排器取任务、起 worktree、调真正干活的 agent（Claude / Codex），跑校验门，过了才合并主分支。失败自动回灌重跑，需要决策时主动找你。
+
+> 命令依然叫 `harness` 和 `harness-infi`（短、好打、不破坏已初始化的项目）；"harness-donk" 是 GitHub / PyPI / brew tap 上的项目标识，与社区其他叫 "harness" 的项目区分。
 
 ```
 你 ──对话──▶ 协调者（Claude Code, system prompt = coordinator.md）
@@ -25,10 +27,10 @@
 
 ```bash
 # 1. 装（一行；自动检系统依赖 / 自动装 uv / 自动设 PATH）
-curl -LsSf https://raw.githubusercontent.com/USER/harness/main/install.sh | bash
+curl -LsSf https://raw.githubusercontent.com/USER/harness-donk/main/install.sh | bash
 
 # 或：已 clone 的情况
-git clone https://github.com/USER/harness.git && cd harness && ./install.sh
+git clone https://github.com/USER/harness-donk.git && cd harness-donk && ./install.sh
 
 # 2. 自检 backend（真烧少量 API）
 harness doctor

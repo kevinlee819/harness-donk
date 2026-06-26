@@ -422,7 +422,7 @@ cmd_help() {
   # 'EOF' 单引号关闭变量/命令替换 —— help 文本里有 $(harness ...) 示例，
   # 不引号会被 bash 当命令执行（一直 stderr 报 "harness: command not found"）
   cat <<'EOF'
-🫏 harness — 多 Agent 自驱动编码 Harness
+🫏 harness-donk — 多 Agent 自驱动编码 Harness
 
 Commands:
   init                    在当前 git repo 初始化 harness
