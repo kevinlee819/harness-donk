@@ -82,11 +82,15 @@ harness-task answer  <task_id> <text>   # 答复 BLOCKED 状态的任务（写 i
 ### 3.1 `orchestrator.sh` 主循环
 
 ```bash
-orchestrator.sh [--project-dir <path>] [--max-workers N] [--once]
+orchestrator.sh [--project <path>] [--once] [--mock] [--max-retries N] \
+                [--model NAME] [--backend NAME] [--max-workers N]
 ```
 
-- `--once`：单跑一轮再退出（测试用）。
-- 默认 daemon 模式，由 `harness-infi` 启动时后台拉起。
+- 实质实现：`src/harness/orchestrator.py`；`orchestrator.sh` 是 7 行 shim。
+- `--once`：claim 一个任务，跑到终态（merged/blocked/failed）+ 排干合并队列后退出。
+- `--max-workers N`：worker 池大小（默 4，env `HARNESS_MAX_WORKERS` 也可设）。`--once` 隐式 pool=1。
+- 默认 daemon 模式，由 `harness-infi` 启动时后台拉起，无限循环每空闲 5s 轮询。
+- **并发模型**：每个 worker 一个 `threading.Thread`，主线程独占跑 git merge（严格串行）。worker 通过 `queue.Queue` 把成功的任务交给主线程合并；失败/blocked 由 worker 自己 transition + notify。
 
 **循环伪代码**：
 
@@ -297,33 +301,36 @@ gate:
 
 ### 7.3 `hooks/notification.sh` 契约
 
-- 输入：Claude Code Notification hook stdin。
-- 行为：路由事件到 `lib/notify.sh`，进而上抛协调者（写编排器待处理事件队列）。
+- 输入：`hooks/notification.sh <event_type> <task_id> <event_json_path>`（由 `harness.notify.notify` fire-and-forget 调用）。
+- 行为：macOS 桌面通知（osascript） + 写 `.harness/logs/notify.log`。
 
 ---
 
 ## 8. 通知路由（M9）
 
-### 8.1 `lib/notify.sh`
+### 8.1 `src/harness/notify.py`
 
-```bash
-notify <event_type> <task_id> <payload_json>
+```python
+from harness.notify import notify
+notify(event_type: str, task_id: Optional[str], payload: dict) -> int
 # event_type: needs_decision | task_completed | task_failed | budget_exceeded
 ```
 
-- 写入 `.harness/events/<ts>-<event_type>-<task_id>.json`。
-- 编排器周期扫描 events/，转交协调者：调 `claude --resume <coordinator_session>` 注入事件（或经 tmux pane 通知 — 阶段二决定具体路径，原则上**结构化注入优先**）。
+- 写入 `events` 表 + `.harness/events/<ts>-<event_type>-<task_id>.json`。
+- fire-and-forget 调 `hooks/notification.sh`（桌面通知 + notify.log）。
+- 协调者经 `harness events pending` / `events ack` 消费（pull-on-re-engagement，见 coordinator.md §2.2）。
 
 ---
 
 ## 9. 成本闸（M10）
 
-### 9.1 `lib/budget.sh`
+### 9.1 `src/harness/budget.py`
 
-```bash
-budget_check                  # 退出码：0=正常, 1=超限
-budget_today                  # stdout: float
-budget_kill_switch            # 停止派发新任务，已运行任务可完成
+```python
+from harness.budget import under_limit, today_cost, daily_limit
+under_limit() -> bool           # True = 仍可派
+today_cost() -> float           # 今日累计 USD
+daily_limit() -> float          # 从 ~/.config/harness/config 读，默 10
 ```
 
 - 日预算从 `~/.config/harness/config` 读取，超限 `notify budget_exceeded`。

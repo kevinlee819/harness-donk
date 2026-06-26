@@ -10,8 +10,9 @@ requires-python = ">=3.9"
 dependencies = []
 
 [project.scripts]
-harness-task = "harness.cli.harness_task:main"
-harness-db   = "harness.cli.db_cli:main"
+harness-task         = "harness.cli.harness_task:main"
+harness-db           = "harness.cli.db_cli:main"
+harness-orchestrator = "harness.cli.orchestrator_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

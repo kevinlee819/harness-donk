@@ -10,7 +10,19 @@ _setup() {
   PROJ=$(make_fixture_project)
   track_cleanup "$(dirname "$PROJ")"
   export HARNESS_DB="$PROJ/.harness/harness.db"
-  source "$HARNESS_HOME/lib/notify.sh"
+}
+
+# Direct call to harness.notify.notify — same path the orchestrator uses:
+# writes event row, JSON file, and fires hooks/notification.sh in background.
+notify() {
+  local etype="$1" tid="$2" payload="${3:-}"
+  [[ -z "$payload" ]] && payload='{}'
+  "$HARNESS_PYTHON" -c '
+import sys, json
+from harness.notify import notify
+tid = None if sys.argv[2] in ("-", "") else sys.argv[2]
+print(notify(sys.argv[1], tid, json.loads(sys.argv[3])))
+' "$etype" "$tid" "$payload"
 }
 
 # 等 notify 的后台 hook 完成（最多 2s）

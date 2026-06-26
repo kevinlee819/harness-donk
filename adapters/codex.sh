@@ -132,11 +132,14 @@ if [[ -n "${HARNESS_MOCK_ADAPTER:-}" ]]; then
     exit 0
   fi
 
-  # 常规 mock：在 worktree 写 CODEX.txt + commit
-  echo "codex-mock-adapter ran: $(echo "$prompt" | head -c 100)" > CODEX.txt
-  git add CODEX.txt >/dev/null 2>&1 || true
+  # 常规 mock：在 worktree 写 CODEX.txt + commit。如需并行安全，
+  # 设 HARNESS_MOCK_OUTPUT_FILE='CODEX-$ADAPTER_TASK_ID.txt' 隔离路径。
+  output_file="${HARNESS_MOCK_OUTPUT_FILE:-CODEX.txt}"
+  output_file=$(eval "printf '%s' \"$output_file\"")
+  echo "codex-mock-adapter ran: $(echo "$prompt" | head -c 100)" > "$output_file"
+  git add "$output_file" >/dev/null 2>&1 || true
   git -c user.email=mock@harness -c user.name=mock-codex \
-      commit -m "mock-codex: $(echo "$prompt" | head -c 50)" >/dev/null 2>&1 || true
+      commit -m "mock-codex: ${ADAPTER_TASK_ID:-?}: $(echo "$prompt" | head -c 50)" >/dev/null 2>&1 || true
   changed=$(_count_files_changed)
   jq -nc --arg sid "$fake_sid" --argjson fc "${changed:-0}" \
     '{ok:true, session_id:$sid, result:"mock-codex done", cost_usd:null, num_turns:1, files_changed:$fc, error:null}'

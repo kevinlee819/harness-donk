@@ -15,14 +15,23 @@
 │   ├── harness-infi                    # 启动协调者会话（用户唯一入口）
 │   └── harness                         # bash 入口：init/status/run-once；DB 操作经 harness-db CLI
 │
-├── orchestrator.sh                     # 执行平面 dumb loop（bash；DB 操作经 harness-db CLI）
+├── orchestrator.sh                     # 7 行 shim：exec python -m harness.cli.orchestrator_cli（保留以兼容 bin/harness run-once / harness-infi 入口）
 │
-├── src/harness/                        # Python 层（碰 SQL / 状态机的部分）
+├── src/harness/                        # Python 层（碰 SQL / 状态机 / 并发的部分）
 │   ├── __init__.py
-│   ├── db.py                           # SQLite 短连接封装、真参数化（替换原 lib/db.sh）
+│   ├── db.py                           # SQLite 短连接封装、真参数化（BEGIN IMMEDIATE 写事务）
+│   ├── orchestrator.py                 # 阶段四 — 并行 worker 池 + 串行 merge consumer
+│   ├── worker.py                       # WorkerThread：单任务全周期（adapter → gate → 重试 → 入 merge 队列）
+│   ├── merge.py                        # MergeRequest + drain_queue（主线程串行 git merge）
+│   ├── adapter.py                      # subprocess 封装：调 adapters/<backend>.sh
+│   ├── notify.py                       # events 表 + JSON 文件 + hooks/notification.sh（端口自 lib/notify.sh）
+│   ├── budget.py                       # 预算闸（端口自 lib/budget.sh）
+│   ├── atomic_write.py                 # JSON / text 原子写（端口自 lib/atomic_write.sh）
+│   ├── config.py                       # 读 ~/.config/harness/config
 │   └── cli/
 │       ├── harness_task.py             # 协调者工具实现
-│       └── db_cli.py                   # bash 调用桥（harness-db <subcmd>）
+│       ├── db_cli.py                   # bash 调用桥（harness-db <subcmd>）
+│       └── orchestrator_cli.py         # console script: harness-orchestrator
 │
 ├── coordinator/                        # 协调者武装包
 │   ├── coordinator.md                  # 协调者 system prompt / 打扰策略（自然语言定义）
@@ -33,11 +42,8 @@
 │   ├── claude.sh
 │   └── codex.sh                        # opencode 暂未做
 │
-├── lib/                                # 可复用 bash 函数库（被 source）
-│   ├── atomic_write.sh                 # 原子写 JSON
+├── lib/                                # 残留 bash 函数库（gate 仍在 bash；其余已迁 Python）
 │   ├── gate.sh                         # 校验门多步骤执行（含 cross_review）
-│   ├── notify.sh                       # events 表 + JSON 文件 + 通知 hook 三路出口
-│   ├── budget.sh                       # 预算闸（手算只读）
 │   └── python_env.sh                   # bash → python 桥：设 $HARNESS_PYTHON + PYTHONPATH
 │
 ├── hooks/                              # 安装到项目 .claude/settings.json 的钩子脚本
@@ -88,14 +94,14 @@
 |---|------|------|---------|------|
 | M1 | 用户入口 | `bin/harness-infi`, `bin/harness` | 启动协调者会话；管理 / 观测命令 | — |
 | M2 | 协调者武装 | `coordinator/` | 协调者 prompt + 协调者可调脚本 | LLM（读） |
-| M3 | 执行编排器 | `orchestrator.sh` | dumb loop：claim 任务 → worktree → adapter → 门 → 合并 | 编排器进程 |
+| M3 | 执行编排器 | `src/harness/orchestrator.py` + `worker.py` + `merge.py`（shim: `orchestrator.sh`）| 并行 worker 池 + 串行 merge：claim → worktree → adapter → 门 → 入 merge 队列 → 主线程合并 | 编排器进程 |
 | M4 | 后端适配器 | `adapters/*.sh` | 归一化 backend CLI 调用为统一返回结构 | adapter 进程 |
-| M5 | SQLite 存储 | `src/harness/db.py` + `src/harness/cli/db_cli.py` + `schema/harness.sql` | 队列 / 状态机 / 会话 / 调用账（Python，真参数化） | 编排器独占 |
-| M6 | 文件黑板 | `lib/atomic_write.sh` + `schema/json/` | worker 与人 → 编排器的写入界面 | 见 §4 |
+| M5 | SQLite 存储 | `src/harness/db.py` + `src/harness/cli/db_cli.py` + `schema/harness.sql` | 队列 / 状态机 / 会话 / 调用账（Python，真参数化，`BEGIN IMMEDIATE`） | 编排器独占 |
+| M6 | 文件黑板 | `src/harness/atomic_write.py` + `schema/json/` | worker 与人 → 编排器的写入界面 | 见 §4 |
 | M7 | 校验门 | `lib/gate.sh` | 多步骤检查 → `.gate-report.json` | gate 进程 |
 | M8 | 安全 hooks | `hooks/` | 项目 `.claude/settings.json` 注册，确定性拦截 | hook 进程 |
-| M9 | 通知路由 | `lib/notify.sh` + `hooks/notification.sh` | events 表 + JSON 文件 + 桌面通知（pull-on-re-engagement，见 coordinator.md §2.2） | notify 进程 |
-| M10 | 成本闸 | `lib/budget.sh` + orchestrator `_budget_guard` | 累计 + 超限 kill switch + budget_exceeded 事件 | 编排器调用 |
+| M9 | 通知路由 | `src/harness/notify.py` + `hooks/notification.sh` | events 表 + JSON 文件 + 桌面通知（pull-on-re-engagement，见 coordinator.md §2.2） | notify 进程 |
+| M10 | 成本闸 | `src/harness/budget.py` + orchestrator `_budget_guard` | 累计 + 超限 kill switch + budget_exceeded 事件 | 编排器调用 |
 | M11 | 项目初始化 | `bin/harness init` + `templates/` | bootstrap 新项目；`--backend` 反转默认 reviewer | 初始化脚本 |
 | M12 | 调用日志 | adapter 内 `_log_raw` | 调用 JSON 落 `logs/raw/`（含 envelope）| adapter 进程 |
 | M13 | 孤儿回收 | orchestrator `_reap_orphans` + `_timeout_blocked` | 单进程下崩溃残留任务自愈 + BLOCKED 超时回收 | 编排器调用 |
@@ -141,7 +147,7 @@
 
 - 上层只调下层，不反向。
 - `lib/` 之间相互独立，不互调（除非显式声明）。例外：`budget.sh` 与 `notify.sh` 都需调 `db.sh`。
-- `adapters/` 不依赖 `lib/db.sh`、`lib/notify.sh` — 它们是纯函数式包装，输入提示词、输出统一结构。
+- `adapters/` 不依赖 db / notify — 它们是纯函数式包装，输入提示词、输出统一结构。
 - `hooks/` 是部署到外部项目的脚本，**禁止依赖 harness 仓库的 lib**（项目里没有），所有需要的工具函数 inline。
 
 ## 4. 写者归属（单写者原则）

@@ -103,9 +103,13 @@ if [[ -n "${HARNESS_MOCK_ADAPTER:-}" ]]; then
     exit 0
   fi
 
-  # 常规 mock 行为：在 worktree 下创建 HELLO.txt 包含 prompt 摘要
-  echo "mock-adapter ran: $(echo "$prompt" | head -c 100)" > HELLO.txt
-  git add HELLO.txt >/dev/null 2>&1 || true
+  # 常规 mock 行为：写一个 HELLO.txt（兼容单任务测试）。如需并行安全，
+  # 设 HARNESS_MOCK_OUTPUT_FILE='HELLO-$ADAPTER_TASK_ID.txt' 让每个任务写到独立路径。
+  output_file="${HARNESS_MOCK_OUTPUT_FILE:-HELLO.txt}"
+  # 允许模板包含 $ADAPTER_TASK_ID 等 — 用 envsubst 风格的 eval（输入受控）
+  output_file=$(eval "printf '%s' \"$output_file\"")
+  echo "mock-adapter ran: $(echo "$prompt" | head -c 100)" > "$output_file"
+  git add "$output_file" >/dev/null 2>&1 || true
   git -c user.email=mock@harness -c user.name=mock commit -m "mock: $(echo "$prompt" | head -c 50)" >/dev/null 2>&1 || true
   changed=$(_count_files_changed)
   jq -nc --arg sid "$fake_sid" --argjson fc "${changed:-0}" \

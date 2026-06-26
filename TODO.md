@@ -207,18 +207,22 @@
 
 ---
 
-## 🟡 阶段四：并行 worktree
+## 🟢 阶段四：并行 worktree（核心已完成）
 
 来自 [docs/development-plan.md §4](docs/development-plan.md)：
 
-- [ ] 编排器主循环改并发 — worker 池 + claim 串行 + 调度并行
-- [ ] 合并仍严格串行（编排器主线程独占）
-- [ ] `harness attach <worker>` 选择 pane
-- [ ] 资源闸：max_concurrent_workers / 单任务 token / 时间硬上限
-- [ ] 任务拆分依赖检查（spec 模板增 `depends_on` 字段，协调者入队前自检）
-- [ ] 验收：8 独立任务并行吞吐 ≥ 串行 3 倍
-- [ ] 验收：合并阶段无 race
-- [ ] 验收：worker 崩溃不污染其他 worktree
+- [x] 编排器主循环改并发 — worker 池 + claim 串行（SQL `RETURNING`）+ 调度并行
+  - `orchestrator.sh` 414 行 bash → `src/harness/{orchestrator,worker,merge,adapter,notify,budget,config,atomic_write}.py`（CLAUDE.md §8.2 触发线）
+  - 新建 `Pool` 类：`w1..wN` 池化复用，busy 集合 + 互斥锁
+  - `WorkerThread` 单任务全周期，posts MergeRequest 到 Queue 退出
+- [x] 合并严格串行（编排器主线程独占 drain Queue）
+- [x] 资源闸：`HARNESS_MAX_WORKERS` env / `--max-workers` 默认 4；外层 `timeout` + 内层 `--max-turns` 双重上限沿用阶段一
+- [x] 修复并发产生的 race：`BEGIN IMMEDIATE` 让 busy_timeout 真正起作用；merge 失败必 `git merge --abort` 防止下次 merge 被脏树污染
+- [x] 验收：4 独立任务并行→全 merged + 合并时序无重叠（test_e2e_parallel 3 case 全绿）
+- [x] 验收：worker 崩溃路径在 thread try/except 内 → task transition FAILED + notify，不污染池内其他 worker
+- [ ] `harness attach <worker>` 选择 tmux pane —— 纯 UX feature，独立小项可后做
+- [ ] 任务拆分依赖检查（spec 模板增 `depends_on` 字段 — 已就位；协调者入队前自检 prompt 待加 coordinator.md）
+- [ ] 验收：8 独立任务并行吞吐 ≥ 串行 3 倍（用户先收下不验收）
 
 ---
 
@@ -228,10 +232,10 @@
 - [x] `tests/run.sh` — 测试发现（.sh + .py） + 子进程隔离 + 汇总报告
 - [x] `tests/lib/assert.sh` — eq/neq/match/file/json/exit_code 等断言
 - [x] `tests/lib/setup.sh` — make_fixture_project / set_gate_test_cmd / 自动清理
-- [x] **当前规模：21 文件 / 135+ cases / ~42s 全绿**
-   - unit (.sh)：atomic_write 6 / gate 6 / hooks 25 / notify 5 / notification_hook 3 / budget 4 / backup 3 / claude_adapter 6 / codex_adapter 7 / gate_cross_review 8 / events_cli 4
-   - unit (.py)：db (含 events / orphan / blocked-overdue / migration drill) 29 / harness_task 11
-   - integration (.sh)：e2e_success 2 / e2e_retry_failed 1 / e2e_blocked_resume 2 / e2e_backend_switch 3 / e2e_orphan_reaper 4 / e2e_depends_on 2 / init_idempotent 7 / harness_infi 4
+- [x] **当前规模：24 文件 / 140+ cases / ~54s 全绿**（阶段四完成）
+   - unit (.sh)：gate 6 / hooks 25 / notification_hook 3 / backup 3 / claude_adapter 6 / codex_adapter 7 / gate_cross_review 8 / events_cli 4
+   - unit (.py)：atomic_write 5 / budget_python 4 / notify_python 4 / orchestrator_pool 5 / merge_serial 3 / db (含 events / orphan / blocked-overdue / migration drill) 29 / harness_task 11
+   - integration (.sh)：e2e_success 2 / e2e_retry_failed 1 / e2e_blocked_resume 2 / e2e_backend_switch 3 / e2e_orphan_reaper 4 / e2e_depends_on 2 / e2e_parallel 3 / init_idempotent 7 / harness_infi 4
 - [x] orchestrator 孤儿任务回收 + BLOCKED 超时（阶段二 #3）
 - [x] adapter 单测：claude.sh 错误路径 + mock 全分支（6 case）；codex.sh resume by UUID mock 验证（7 case）
 - [x] **tests/manual/** 目录建立 — 真模型 smoke（claude / codex / cross_review / coordinator 4 个脚本 + README）；不进 run.sh

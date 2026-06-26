@@ -156,7 +156,10 @@ def transition(task_id: str, to_state: str, reason: str = "") -> None:
     """Set tasks.status and append a transitions row in one short transaction."""
     now = _now()
     with _connect() as c:
-        c.execute("BEGIN")
+        # IMMEDIATE so we grab the write lock now and busy_timeout governs the wait.
+        # Default DEFERRED begins as a reader; the SQLITE_BUSY on the first write
+        # won't be retried by busy_timeout for the BEGIN itself under contention.
+        c.execute("BEGIN IMMEDIATE")
         try:
             from_state = c.execute(
                 "SELECT status FROM tasks WHERE id=?", (task_id,)
@@ -202,27 +205,41 @@ def inc_redispatches(task_id: str) -> None:
         )
 
 
-def query_orphans(threshold_minutes: int) -> list[tuple]:
+def query_orphans(threshold_minutes: int, exclude_ids: Optional[list[str]] = None) -> list[tuple]:
     """Tasks left in transient states with `updated` older than threshold.
 
-    Single-process orchestrator: at loop top, no task of ours is mid-flight
-    (run_task is synchronous). Anything still in dispatched/working/gating
-    is from a previous crashed run → reap.
+    `exclude_ids` is the set of task_ids currently in-flight inside *this*
+    orchestrator process — the parallel pool model needs them filtered out
+    so we don't reap our own live workers. In the single-worker model this
+    list was empty (loop-top invariant).
 
     Returns rows of (id, status, retries, redispatches, updated).
     """
     modifier = f"-{int(threshold_minutes)} minutes"
+    exclude_ids = exclude_ids or []
     with _connect() as c:
-        rows = c.execute(
-            """
-            SELECT id, status, retries, redispatches, updated
-            FROM tasks
-            WHERE status IN ('dispatched','working','gating')
-              AND updated < datetime('now', ?)
-            ORDER BY priority, id
-            """,
-            (modifier,),
-        ).fetchall()
+        if exclude_ids:
+            placeholders = ",".join("?" * len(exclude_ids))
+            sql = (
+                "SELECT id, status, retries, redispatches, updated "
+                "FROM tasks "
+                "WHERE status IN ('dispatched','working','gating') "
+                f"  AND id NOT IN ({placeholders}) "
+                "  AND updated < datetime('now', ?) "
+                "ORDER BY priority, id"
+            )
+            rows = c.execute(sql, (*exclude_ids, modifier)).fetchall()
+        else:
+            rows = c.execute(
+                """
+                SELECT id, status, retries, redispatches, updated
+                FROM tasks
+                WHERE status IN ('dispatched','working','gating')
+                  AND updated < datetime('now', ?)
+                ORDER BY priority, id
+                """,
+                (modifier,),
+            ).fetchall()
     return rows
 
 

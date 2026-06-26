@@ -11,7 +11,18 @@ _setup() {
   track_cleanup "$(dirname "$PROJ")"
   cd "$PROJ"
   export HARNESS_DB="$PROJ/.harness/harness.db"
-  source "$HARNESS_HOME/lib/notify.sh"
+}
+
+# Direct DB event-write helper (lib/notify.sh is gone; the harness-db CLI is the
+# same underlying call notify() used to make).
+notify() {
+  local etype="$1" tid="$2" payload="${3:-}"
+  [[ -z "$payload" ]] && payload='{}'
+  if [[ "$tid" == "-" || -z "$tid" ]]; then
+    printf '%s' "$payload" | "$HARNESS_PYTHON" -m harness.cli.db_cli event-write "$etype"
+  else
+    printf '%s' "$payload" | "$HARNESS_PYTHON" -m harness.cli.db_cli event-write "$etype" --task "$tid"
+  fi
 }
 
 test_events_pending_shows_unacked() {

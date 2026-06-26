@@ -37,25 +37,26 @@ test_creates_session_with_two_windows() {
   # 给 orchestrator 几秒爬起来
   sleep 2
 
-  # orchestrator window 应有 orchestrator.sh 进程（pane_pid 是 bash launcher，
-  # 用 pgrep -P 找子进程的命令行）
+  # orchestrator window 应有 orchestrator 进程（pane_pid 是 bash launcher，
+  # 用 pgrep -P 找子进程的命令行）。注意阶段四后 orchestrator.sh 是 shim — exec 到
+  # python -m harness.cli.orchestrator_cli，所以也接受 python 模块名。
   local pane_pid; pane_pid=$(tmux list-panes -t "$sess:1" -F '#{pane_pid}' 2>/dev/null | head -1)
   local found=0
+  _matches_orch() { [[ "$1" == *orchestrator.sh* || "$1" == *orchestrator_cli* ]]; }
   if [[ -n "$pane_pid" ]]; then
-    # launcher exec 之后 bash 进程会被 orchestrator.sh 替换，所以 pane_pid 本身或子进程都可能匹配
     local cmd; cmd=$(ps -p "$pane_pid" -o args= 2>/dev/null || true)
-    [[ "$cmd" == *orchestrator.sh* ]] && found=1
+    _matches_orch "$cmd" && found=1
     if [[ $found -eq 0 ]]; then
       local children; children=$(pgrep -P "$pane_pid" 2>/dev/null || true)
       for cpid in $children; do
         local c; c=$(ps -p "$cpid" -o args= 2>/dev/null || true)
-        [[ "$c" == *orchestrator.sh* ]] && found=1
+        _matches_orch "$c" && found=1
       done
     fi
   fi
 
   _kill_session "$sess"
-  assert_eq "1" "$found" "orchestrator.sh running in window 1"
+  assert_eq "1" "$found" "orchestrator running in window 1"
 }
 
 test_idempotent_session_reuse() {
