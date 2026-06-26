@@ -2,6 +2,7 @@
 
 | 文档 | 受众 | 解决什么问题 |
 |------|------|-------------|
+| **[getting-started.md](getting-started.md)** | **首次使用者** | **装好、接管项目、派出第一个真任务；含命令速查 + 排障 FAQ** |
 | [design.md](design.md) | 全员 | 设计哲学、原则、权衡 — **冲突时以此为准** |
 | [development-plan.md](development-plan.md) | 开发者 | 按阶段干什么、每阶段验收什么、依赖顺序 |
 | [module-architecture.md](module-architecture.md) | 开发者 | 模块清单、目录结构、写者归属、依赖图 |
@@ -11,6 +12,7 @@
 
 **阅读顺序**：
 
+- 第一次用：**getting-started.md**（其它都不用看）
 - 新接手开发：design.md → development-plan.md → module-architecture.md → interfaces.md
 - 接入新 CLI：adapter-contract.md → data-schemas.md
 - 改 schema：data-schemas.md → 同步 adapter / 编排器 / 协调者三端
