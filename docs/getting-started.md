@@ -259,21 +259,49 @@ cd harness-donk
 ./install.sh --uninstall         # 反向操作：删符号链接 + shell rc 行 +（可选）源码目录
 ```
 
-### 4.5 升级 / 卸载
+### 4.5 升级
 
 ```bash
-# 升级
-cd $HOME/.harness && git pull && uv sync
+harness upgrade
+```
 
-# 卸载
+等价于 `bash $HOME/.harness/install.sh --upgrade`。会按序：
+
+1. **校验源码状态**：有未提交改动 / 本地多于 upstream → 拒绝升级（防止静默丢工作）。
+2. **`git pull --ff-only`**：只接受 fast-forward。合并冲突的可能性 = 0。
+3. 打印这次拉到的所有 commit 信息（一眼看到改了啥）。
+4. **`uv sync`**：装新依赖、清不需要的；Python 环境跟仓库一致。
+5. **重做符号链接**（幂等）+ 跑一次 `harness setup`（也是幂等的）。
+
+**关于正在跑的任务**：升级过程不会动 `.harness/harness.db` 或 worker 的 worktree。已在跑的 worker 继续用旧代码完成本轮；新任务（升级后第一次 claim）开始使用新代码。**保险起见，升级前先停掉 `harness-infi` 会话**：
+
+```bash
+tmux kill-session -t harness-<sha8>     # 或在协调者 window 里 :exit
+harness upgrade
+harness-infi                            # 重启
+```
+
+### 4.6 卸载
+
+```bash
 bash $HOME/.harness/install.sh --uninstall
 ```
 
-**目录心智模型**（同 git）：
+会按序询问（不带 `--yes` 时每步都确认）：
+
+1. 删 `$HOME/.local/bin/{harness,harness-infi}` 符号链接。
+2. 删 shell rc 里 `# added by harness installer` 标记行。
+3. 询问是否删 `$HOME/.harness/` 源码目录（含 `.venv/`）。
+4. 询问是否删 `~/.config/harness/`（含日预算配置、项目登记表）。
+
+**不会自动删的**：每个项目里的 `.harness/` 和 `AGENTS.md`。这些是项目数据，要不要保留只有你知道。手动 `rm -rf <project>/.harness <project>/AGENTS.md` 来彻底清理某个项目。
+
+### 4.7 目录心智模型（同 git）
+
 - `$HOME/.harness/` 是工具本体，装一份，**永远不复制进任何项目**。
 - 入口 `harness` / `harness-infi` 在 `$HOME/.local/bin/`（uv 也装在这；大多数现代系统已经在 PATH 上）。
 - 项目里只出现声明式的 `AGENTS.md` / `.claude/settings.json` / `specs/`（进 git）+ 运行时状态 `.harness/`（整体 gitignore）。
-- 升级 harness = 在 `$HOME/.harness` 里 `git pull && uv sync`，所有接管的项目即刻生效。
+- 升级 harness = `harness upgrade`，所有接管的项目即刻享受新版本。
 
 ---
 

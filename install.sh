@@ -22,6 +22,7 @@
 #   --prefix DIR    源码安装目录（默 $HOME/.harness）
 #   --bindir DIR    入口符号链接目录（默 $HOME/.local/bin）
 #   --yes / -y      跳过所有交互确认
+#   --upgrade       已装的源码 git pull --ff-only + uv sync + 幂等重做符号链接
 #   --uninstall     反向操作：删符号链接 + shell rc 行 + （可选）源码目录
 #   --help / -h     本帮助
 
@@ -62,9 +63,10 @@ while [[ $# -gt 0 ]]; do
     --prefix)    HARNESS_HOME="$2"; shift 2 ;;
     --bindir)    HARNESS_BINDIR="$2"; shift 2 ;;
     -y|--yes)    YES=1; shift ;;
+    --upgrade)   MODE="upgrade"; shift ;;
     --uninstall) MODE="uninstall"; shift ;;
     -h|--help)
-      sed -n '2,26p' "${BASH_SOURCE[0]}"; exit 0 ;;
+      sed -n '2,27p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) fail "unknown argument: $1"; exit 1 ;;
   esac
 done
@@ -150,6 +152,33 @@ _ensure_path() {
   fi
 }
 
+# ── 入口符号链接（幂等，install 与 upgrade 共用）───────────
+_link_entries() {
+  local src="$1" bindir="$2"
+  mkdir -p "$bindir"
+  for entry in harness harness-infi; do
+    local target="$src/bin/$entry"
+    local link="$bindir/$entry"
+    if [[ ! -f "$target" ]]; then
+      fail "$target 不存在 — 源码不完整"
+      exit 1
+    fi
+    if [[ -L "$link" || -e "$link" ]]; then
+      if [[ "$(readlink "$link" 2>/dev/null)" == "$target" ]]; then
+        ok "${link} → ${target}（已是正确链接）"
+        continue
+      fi
+      if confirm "$link 已存在，覆盖"; then
+        rm -f "$link"
+      else
+        warn "跳过 $link"; continue
+      fi
+    fi
+    ln -s "$target" "$link"
+    ok "$link → $target"
+  done
+}
+
 # ── 源码就位 ────────────────────────────────────────────
 _resolve_source() {
   # 如果脚本被 source 自一个有 bin/harness-infi 的目录 → 那就是源码树
@@ -207,29 +236,7 @@ do_install() {
   ok "Python 环境就绪"
 
   step "5/6  入口符号链接到 $HARNESS_BINDIR"
-  mkdir -p "$HARNESS_BINDIR"
-  for entry in harness harness-infi; do
-    local target="$src/bin/$entry"
-    local link="$HARNESS_BINDIR/$entry"
-    if [[ ! -f "$target" ]]; then
-      fail "$target 不存在 — 源码不完整"
-      exit 1
-    fi
-    if [[ -L "$link" || -e "$link" ]]; then
-      if [[ "$(readlink "$link" 2>/dev/null)" == "$target" ]]; then
-        ok "${link} → ${target}（已是正确链接）"
-        continue
-      fi
-      if confirm "$link 已存在，覆盖"; then
-        rm -f "$link"
-      else
-        warn "跳过 $link"; continue
-      fi
-    fi
-    ln -s "$target" "$link"
-    ok "$link → $target"
-  done
-
+  _link_entries "$src" "$HARNESS_BINDIR"
   _ensure_path "$HARNESS_BINDIR"
 
   step "6/6  写全局默认配置（harness setup）"
@@ -257,6 +264,83 @@ ${C_BOLD}下一步${C_RST}
 升级：       cd $src && git pull && uv sync
 卸载：       $HARNESS_BINDIR/harness 在 PATH 上时：${C_BLUE}bash $src/install.sh --uninstall${C_RST}
 EOF
+}
+
+# ── 升级主流程 ──────────────────────────────────────────
+# 设计：尽量幂等、保守。git pull --ff-only 拒绝有本地未提交改动或分支偏离的
+# 情况，避免静默丢工作。dep 检查 + 符号链接复用 install 同一套函数。
+_resolve_existing_source() {
+  # 与 _resolve_source 不同：升级时必须找到已存在的源码，绝不 clone。
+  # 优先级：1) 脚本所在目录（如果是 git 仓库）2) $HARNESS_HOME
+  local script_path="${BASH_SOURCE[0]:-}"
+  if [[ -n "$script_path" && -f "$script_path" ]]; then
+    local script_dir; script_dir=$(cd "$(dirname "$script_path")" && pwd)
+    if [[ -d "$script_dir/.git" && -f "$script_dir/bin/harness-infi" ]]; then
+      echo "$script_dir"; return 0
+    fi
+  fi
+  if [[ -d "$HARNESS_HOME/.git" && -f "$HARNESS_HOME/bin/harness-infi" ]]; then
+    echo "$HARNESS_HOME"; return 0
+  fi
+  fail "找不到 harness-donk 源码（既不在脚本旁也不在 $HARNESS_HOME）"
+  fail "如果你装到了别的位置，传 --prefix DIR"
+  exit 1
+}
+
+do_upgrade() {
+  step "升级 harness-donk"
+
+  info "1/5  定位源码"
+  local src; src=$(_resolve_existing_source)
+  ok "源码：$src"
+
+  info "2/5  git fetch + 检查本地状态"
+  ( cd "$src" && git fetch --quiet ) || { fail "git fetch 失败"; exit 1; }
+  # 本地未提交改动 → 拒绝（防止 git pull 出冲突静默丢工作）
+  if ! ( cd "$src" && git diff --quiet HEAD ); then
+    fail "$src 有未提交改动，先 commit/stash 或 reset 再升级"
+    ( cd "$src" && git status --short | sed 's/^/    /' >&2 )
+    exit 1
+  fi
+  local local_head remote_head
+  local_head=$( cd "$src" && git rev-parse HEAD )
+  remote_head=$( cd "$src" && git rev-parse '@{u}' 2>/dev/null ) || {
+    fail "$src 当前分支没有 upstream，无法升级"
+    exit 1
+  }
+  if [[ "$local_head" == "$remote_head" ]]; then
+    ok "已是最新（${local_head:0:8}）"
+    info "如果只想强制重做 symlink + uv sync，继续走完后续步骤"
+  else
+    local n_ahead; n_ahead=$( cd "$src" && git rev-list --count "$remote_head".."$local_head" )
+    if [[ "$n_ahead" -gt 0 ]]; then
+      fail "$src 比 upstream 多 $n_ahead 个本地 commit；先 push 或 reset 再升级"
+      exit 1
+    fi
+    local n_behind; n_behind=$( cd "$src" && git rev-list --count "$local_head".."$remote_head" )
+    info "落后 upstream $n_behind 个 commit，将 fast-forward"
+  fi
+
+  info "3/5  git pull --ff-only"
+  ( cd "$src" && git pull --ff-only ) || { fail "git pull 失败"; exit 1; }
+  local new_head; new_head=$( cd "$src" && git rev-parse HEAD )
+  if [[ "$new_head" != "$local_head" ]]; then
+    ok "升级到 ${new_head:0:8}（含变更如下）"
+    ( cd "$src" && git log --oneline "$local_head".."$new_head" | sed 's/^/    /' )
+  fi
+
+  info "4/5  uv sync（同步 Python 依赖）"
+  ( cd "$src" && uv sync ) || { fail "uv sync 失败"; exit 1; }
+  ok "Python 环境已同步"
+
+  info "5/5  幂等重做入口符号链接 + harness setup"
+  _link_entries "$src" "$HARNESS_BINDIR"
+  "$src/bin/harness" setup >/dev/null 2>&1 || warn "harness setup 有 warning，可单独再跑"
+  ok "升级完成"
+
+  if [[ "$new_head" == "$local_head" ]]; then
+    info "提示：本次只刷新了 symlink + .venv，源码没变。"
+  fi
 }
 
 # ── 卸载主流程 ──────────────────────────────────────────
@@ -319,5 +403,6 @@ do_uninstall() {
 # ── 入口分发 ─────────────────────────────────────────────
 case "$MODE" in
   install)   do_install ;;
+  upgrade)   do_upgrade ;;
   uninstall) do_uninstall ;;
 esac

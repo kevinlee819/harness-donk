@@ -41,7 +41,10 @@ harness init             # 生成 AGENTS.md（编辑顶部 gate 配置：test/li
 harness-infi             # 启动协调者，开始干活
 ```
 
-> installer 默认装到 `$HOME/.harness/`，入口符号链接到 `$HOME/.local/bin/`。改路径用 `--prefix` / `--bindir`，卸载用 `--uninstall`。
+> installer 默认装到 `$HOME/.harness/`，入口符号链接到 `$HOME/.local/bin/`。改路径用 `--prefix` / `--bindir`。
+>
+> **升级**：`harness upgrade`（`git pull --ff-only + uv sync`，有未提交改动会拒绝）
+> **卸载**：`bash $HOME/.harness/install.sh --uninstall`
 
 详细安装、配置、使用、排障 → **[docs/getting-started.md](docs/getting-started.md)**。
 
