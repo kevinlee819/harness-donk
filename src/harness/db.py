@@ -51,17 +51,60 @@ def _connect(db_path: Optional[Path] = None) -> Iterator[sqlite3.Connection]:
 
 
 def init(schema_sql_path: Path, db_path: Optional[Path] = None) -> None:
-    """Run schema SQL (idempotent) and verify user_version."""
+    """Run base schema SQL (idempotent), apply pending migrations, verify version.
+
+    Migration convention: files at `<schema_sql_path.parent>/migrations/V<N>__*.sql`
+    where `<N>` is an integer target user_version. Files are applied in ascending
+    order when current user_version < N <= SCHEMA_VERSION. After each, the runner
+    sets `PRAGMA user_version=N`.
+
+    First-time install: base SQL creates tables + sets user_version=N (current
+    SCHEMA_VERSION). No migrations apply.
+
+    Existing install on old version: base SQL is idempotent (CREATE TABLE IF NOT
+    EXISTS); user_version starts at last-applied N; migrations beyond N apply.
+    """
     p = db_path if db_path is not None else _db_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     sql = schema_sql_path.read_text()
+    migrations_dir = schema_sql_path.parent / "migrations"
     with _connect(p) as c:
         c.executescript(sql)
         v = c.execute("PRAGMA user_version").fetchone()[0]
+        v = _apply_migrations(c, migrations_dir, v, SCHEMA_VERSION)
         if v != SCHEMA_VERSION:
             raise RuntimeError(
                 f"db_init: user_version={v}, expected {SCHEMA_VERSION}"
             )
+
+
+def _apply_migrations(
+    conn: sqlite3.Connection,
+    migrations_dir: Path,
+    current: int,
+    target: int,
+) -> int:
+    """Apply V<N>__*.sql files where current < N <= target. Returns final version.
+
+    Format: `V<integer>__<short_description>.sql`. Example: `V2__add_priority_index.sql`.
+    Files are applied in ascending N order; each one bumps `user_version` to its N.
+    """
+    if not migrations_dir.exists():
+        return current
+    pending: list[tuple[int, Path]] = []
+    for f in migrations_dir.glob("V*.sql"):
+        try:
+            n = int(f.stem.split("__", 1)[0].lstrip("V"))
+        except ValueError:
+            continue
+        if current < n <= target:
+            pending.append((n, f))
+    pending.sort(key=lambda x: x[0])
+    for n, f in pending:
+        conn.executescript(f.read_text())
+        conn.execute(f"PRAGMA user_version={n}")
+        current = n
+    return current
 
 
 def add_task(
@@ -212,6 +255,15 @@ def get_retries(task_id: str) -> int:
             "SELECT retries FROM tasks WHERE id=?", (task_id,)
         ).fetchone()
     return int(row[0]) if row else 0
+
+
+def get_spec_path(task_id: str) -> Optional[str]:
+    """Return spec_path string for task or None if not found."""
+    with _connect() as c:
+        row = c.execute(
+            "SELECT spec_path FROM tasks WHERE id=?", (task_id,)
+        ).fetchone()
+    return row[0] if row else None
 
 
 def register_session(task_id: str, backend: str, session_id: str) -> None:

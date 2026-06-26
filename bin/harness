@@ -17,6 +17,21 @@ cmd="${1:-help}"; shift || true
 
 cmd_init() {
   local cwd; cwd=$(pwd)
+  # 解析 --backend：决定默认 reviewer（生成者-裁判分离原则六；writer != reviewer）
+  local writer="claude"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --backend) writer="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  local reviewer
+  case "$writer" in
+    claude) reviewer="codex" ;;
+    codex)  reviewer="claude" ;;
+    *)      reviewer="codex" ;;   # 未知 backend 默认 codex 作 reviewer
+  esac
+
   [[ ! -d "$cwd/.git" ]] && { echo "not a git repo: $cwd" >&2; exit 1; }
   if [[ -f "$cwd/.harness/harness.db" ]]; then
     echo "already initialized" >&2; return 0
@@ -27,7 +42,10 @@ cmd_init() {
   _db init || { echo "db init failed" >&2; exit 1; }
 
   if [[ ! -f "$cwd/AGENTS.md" ]]; then
-    sed "s/{{PROJECT_NAME}}/$(basename "$cwd")/g" "$HARNESS_HOME/templates/AGENTS.md.tmpl" > "$cwd/AGENTS.md"
+    sed -e "s/{{PROJECT_NAME}}/$(basename "$cwd")/g" \
+        -e "s/^cross_review_reviewer: codex$/cross_review_reviewer: $reviewer/" \
+        "$HARNESS_HOME/templates/AGENTS.md.tmpl" > "$cwd/AGENTS.md"
+    echo "configured cross_review_reviewer: $reviewer (writer=$writer)"
   fi
   [[ ! -L "$cwd/CLAUDE.md" && ! -f "$cwd/CLAUDE.md" ]] && ln -s AGENTS.md "$cwd/CLAUDE.md"
 
@@ -298,6 +316,35 @@ cmd_attach() {
   fi
 }
 
+cmd_events() {
+  local cwd; cwd=$(pwd)
+  export HARNESS_DB="$cwd/.harness/harness.db"
+  [[ ! -f "$HARNESS_DB" ]] && { echo "not initialized" >&2; exit 1; }
+
+  local sub="${1:-pending}"; shift || true
+  case "$sub" in
+    pending|list)
+      printf "  %-4s %-21s %-16s %-12s %s\n" "ID" "TIMESTAMP" "TYPE" "TASK" "PAYLOAD"
+      _db event-pending | while IFS=$'\t' read -r eid ts etype tid payload; do
+        # payload 截短到 60 字符方便扫
+        local payload_trim; payload_trim=$(printf '%s' "$payload" | cut -c1-60)
+        printf "  %-4s %-21s %-16s %-12s %s\n" "$eid" "$ts" "$etype" "${tid:--}" "$payload_trim"
+      done
+      ;;
+    ack)
+      local n=0
+      for eid in "$@"; do
+        _db event-ack "$eid" && n=$((n+1))
+      done
+      echo "acked $n event(s)"
+      ;;
+    *)
+      echo "usage: harness events [pending|ack <eid>...]" >&2
+      exit 1
+      ;;
+  esac
+}
+
 cmd_help() {
   cat <<EOF
 harness — 多 Agent 自驱动编码 Harness
@@ -308,6 +355,8 @@ Commands:
   doctor                  各 backend echo 自检（会真调一次 claude，烧少量 API）
   status [--task T-XXX [--history]]
                           任务列表 / 单任务详情 / 迁移史
+  events pending          列出待处理事件（needs_decision / failed / completed / budget_exceeded）
+  events ack <eid>...     标记事件已交付（避免协调者重复报告）
   backup                  sqlite3 .backup 落到 .harness/backups/
   run-once [--mock]       跑一轮编排器（处理一个任务后退出）
   attach [<worker_id>]    attach 到 tmux（无参 = 协调者会话）
@@ -326,6 +375,7 @@ case "$cmd" in
   setup) cmd_setup "$@" ;;
   doctor) cmd_doctor "$@" ;;
   status) cmd_status "$@" ;;
+  events) cmd_events "$@" ;;
   backup) cmd_backup "$@" ;;
   run-once) cmd_run_once "$@" ;;
   attach) cmd_attach "$@" ;;

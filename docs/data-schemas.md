@@ -278,8 +278,10 @@ YAML frontmatter + Markdown body：
 schema_version: 1
 task_id: T-0042
 title: 为 /auth 端点添加 JWT 校验
-backend: claude              # 可选；默认协调者选
-model: opus-4-7              # 可选
+backend: claude              # 可选；默认 orchestrator --backend 或 HARNESS_BACKEND（claude）
+model: opus-4-7              # 可选；透传给 adapter
+reviewer: codex              # 可选；覆盖 AGENTS.md 的 cross_review_reviewer
+cross_review: true           # 可选 true/false；覆盖 AGENTS.md 的 cross_review_enabled
 priority: 50
 depends_on: []
 file_scope:                  # 必填；diff_audit 据此判越界
@@ -360,8 +362,42 @@ max_concurrent_workers = 1    # 阶段四前固定 1
 
 ## 7. schema 升级流程
 
-1. 在 `schema/harness.sql` 末尾追加 `ALTER TABLE` 块，**不删旧字段**。
-2. 递增 `PRAGMA user_version`。
-3. 同步所有 JSON schema 的 `schema_version`。
-4. 三端 PR 必须同 commit：`lib/db.sh`、`adapters/*.sh`、`coordinator/tools/harness-task`。
-5. `harness migrate` 命令在启动时执行 `user_version` 比对，按序应用迁移。
+### 7.1 文件布局
+
+```
+schema/
+├── harness.sql                            # base schema：全新安装跑这个
+└── migrations/
+    ├── README.md                          # 本流程速查
+    └── V<N>__<short_description>.sql      # 增量迁移；N = 目标 user_version
+```
+
+### 7.2 加新列 / 新表的流程（举例：给 tasks 加 tags 列）
+
+1. **base schema 同步**：在 `schema/harness.sql` 的 `CREATE TABLE tasks` 里加 `tags TEXT,` 字段。`CREATE TABLE IF NOT EXISTS` 对已存在的表是 no-op；这一改只影响**全新安装**。
+2. **写迁移文件**：`schema/migrations/V2__add_tasks_tags_column.sql`：
+   ```sql
+   ALTER TABLE tasks ADD COLUMN tags TEXT;
+   ```
+   不要在迁移文件里写 `PRAGMA user_version=2`——迁移 runner 会自动设置。
+3. **改 SCHEMA_VERSION**：`src/harness/db.py` 顶端 `SCHEMA_VERSION = 2`。
+4. **同步 base SQL 顶端 PRAGMA**：`schema/harness.sql` 把 `PRAGMA user_version=1` 改为 `=2`。
+5. **三端代码同步改**（碰新字段的）：`db.py`、`db_cli.py`、`adapter` 落日志格式、`coordinator-tool` 用法。
+6. **本机自测**：把旧 `.harness/harness.db`（user_version=1）跑一次 `harness init` 或重启 orchestrator——`init()` 应自动跑 V2 迁移。
+7. **commit**：base SQL + V2 文件 + SCHEMA_VERSION 改动同一个 commit。
+
+### 7.3 不删旧字段
+
+- 兼容回退（如果新版有问题，可以 `git revert` 让旧代码读老 DB）。
+- 历史 backup（`.harness/backups/harness-*.db`）仍可读。
+- 真要删，等数据迁完 + 跨越一个稳定大版本之后单独做 deprecation。
+
+### 7.4 runner 行为（`db._apply_migrations`）
+
+- 扫 `schema/migrations/V*.sql`，按 N 升序。
+- 仅对 `current_user_version < N <= SCHEMA_VERSION` 范围执行。
+- 每应用一份 → `PRAGMA user_version=N` 立即落，下次启动接着续。
+- 全新安装：`base SQL` 直接把 user_version 设到当前 SCHEMA_VERSION → runner 看 current==target，no-op。
+- 失败：抛出原 sqlite3 异常，不偷偷吞——上游 `init()` 会向 caller 报错。
+
+测试覆盖：`tests/unit/test_db.py::test_apply_migrations_*`（4 case），含目录缺失、已应用跳过、超目标版本忽略。

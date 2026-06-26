@@ -87,6 +87,51 @@ DIFF_AUDIT_CMD=$(_extract diff_audit)
 CROSS_REVIEW_ENABLED=$(_extract 'cross_review_enabled')   # 简化：扁平 key
 CROSS_REVIEW_REVIEWER=$(_extract 'cross_review_reviewer') # claude / codex
 
+# spec frontmatter 可覆盖 AGENTS.md 的 reviewer。spec 路径优先取 HARNESS_SPEC_PATH，
+# 否则查 DB（resume 路径上没有 spec_path 环境）。
+_spec_field() {
+  # _spec_field <spec_path> <field>
+  local spec="$1" field="$2"
+  [[ ! -f "$spec" ]] && return 0
+  awk -v key="$field" '
+    /^---[[:space:]]*$/{ if(in_fm){exit} else {in_fm=1; next} }
+    in_fm && $0 ~ ("^" key ":") {
+      sub(/^[a-zA-Z_]+:[[:space:]]*/, "", $0)
+      gsub(/^"|"$/, "", $0)
+      gsub(/^'\''|'\''$/, "", $0)
+      print $0
+      exit
+    }
+  ' "$spec"
+}
+
+_resolve_spec_path() {
+  # echo absolute path to spec or nothing
+  if [[ -n "${HARNESS_SPEC_PATH:-}" && -f "$HARNESS_SPEC_PATH" ]]; then
+    echo "$HARNESS_SPEC_PATH"; return 0
+  fi
+  [[ -z "${HARNESS_TASK_ID:-}" || -z "${HARNESS_DB:-}" ]] && return 0
+  : "${HARNESS_HOME:?HARNESS_HOME required}"
+  local rel; rel=$("${HARNESS_PYTHON:-python3}" -m harness.cli.db_cli get-spec "$HARNESS_TASK_ID" 2>/dev/null)
+  [[ -z "$rel" ]] && return 0
+  # spec_path 是相对项目根的，需要找项目根（HARNESS_DB 父父目录）
+  local proj; proj=$(dirname "$(dirname "$HARNESS_DB")")
+  local full="$proj/$rel"
+  [[ -f "$full" ]] && echo "$full"
+}
+
+_spec_path=$(_resolve_spec_path)
+if [[ -n "$_spec_path" ]]; then
+  _spec_reviewer=$(_spec_field "$_spec_path" "reviewer")
+  if [[ -n "$_spec_reviewer" ]]; then
+    CROSS_REVIEW_REVIEWER="$_spec_reviewer"
+  fi
+  _spec_enable=$(_spec_field "$_spec_path" "cross_review")
+  # spec 的 cross_review: true/false 也可覆盖（默认走 AGENTS.md）
+  [[ "$_spec_enable" == "true"  ]] && CROSS_REVIEW_ENABLED="true"
+  [[ "$_spec_enable" == "false" ]] && CROSS_REVIEW_ENABLED="false"
+fi
+
 _run_step "build"        "$BUILD_CMD"
 _run_step "lint"         "$LINT_CMD"
 _run_step "test"         "$TEST_CMD"

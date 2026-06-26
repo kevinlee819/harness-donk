@@ -106,6 +106,48 @@ test_missing_reviewer_adapter_fails() {
   assert_contains "reviewer adapter not found" "$out"
 }
 
+test_spec_reviewer_overrides_agents_md() {
+  # AGENTS.md 指 bogus reviewer（gate 会失败），spec frontmatter 覆盖到 claude → gate 过。
+  # 此设置只有「spec 真覆盖了」时才能通过，故能直接验证 override 路径。
+  local wt; wt=$(_make_review_worktree)
+  _write_agents "$wt" "bogus_backend" "true"
+  mkdir -p "$wt/specs"
+  cat > "$wt/specs/T-spec1.md" <<'EOF'
+---
+task_id: T-spec1
+title: test
+reviewer: claude
+---
+body
+EOF
+  export HARNESS_MOCK_ADAPTER=1
+  HARNESS_TASK_ID=T-spec1 HARNESS_SPEC_PATH="$wt/specs/T-spec1.md" \
+    bash "$HARNESS_HOME/lib/gate.sh" "$wt"
+  local rc=$?
+  unset HARNESS_MOCK_ADAPTER
+  assert_exit_code 0 "$rc" "spec.reviewer=claude overrode bogus → gate passed"
+  local cr; cr=$(jq -c '.steps[] | select(.name=="cross_review")' "$wt/.gate-report.json")
+  assert_eq "true" "$(printf '%s' "$cr" | jq -r '.ok')"
+  assert_contains "approved" "$(printf '%s' "$cr" | jq -r '.output')"
+}
+
+test_spec_cross_review_false_disables() {
+  local wt; wt=$(_make_review_worktree)
+  _write_agents "$wt" "codex" "true"   # AGENTS.md 默认 true
+  mkdir -p "$wt/specs"
+  cat > "$wt/specs/T-spec2.md" <<'EOF'
+---
+task_id: T-spec2
+cross_review: false
+---
+EOF
+  HARNESS_TASK_ID=T-spec2 HARNESS_SPEC_PATH="$wt/specs/T-spec2.md" \
+    bash "$HARNESS_HOME/lib/gate.sh" "$wt"
+  assert_exit_code 0 "$?"
+  local cr; cr=$(jq -c '.steps[] | select(.name=="cross_review")' "$wt/.gate-report.json")
+  assert_eq "true" "$(printf '%s' "$cr" | jq -r '.skipped')" "spec cross_review:false → skipped"
+}
+
 test_empty_diff_skipped() {
   local d; d=$(make_tmp_dir); track_cleanup "$d"
   mkdir -p "$d/proj"

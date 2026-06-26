@@ -250,6 +250,79 @@ class DbTestCase(unittest.TestCase):
         ids = [r[0] for r in rows]
         self.assertEqual(["T-OLD-BLK"], ids, "only T-OLD-BLK is overdue")
 
+    # ── migration runner drill ──
+    def test_apply_migrations_runs_in_order(self):
+        """演练：模拟 schema 从 v1 → v3 的迁移路径。
+
+        通过 _apply_migrations 直接，不动 production SCHEMA_VERSION。
+        """
+        import sqlite3
+        # 初始化到 v1（用当前 schema）
+        with sqlite3.connect(str(self.db_path)) as c:
+            (v,) = c.execute("PRAGMA user_version").fetchone()
+        self.assertEqual(1, v)
+
+        # 准备 mock migrations 目录
+        migrations = Path(self._tmp.name) / "migrations"
+        migrations.mkdir()
+        (migrations / "V2__add_test_col.sql").write_text(
+            "ALTER TABLE tasks ADD COLUMN test_col TEXT;"
+        )
+        (migrations / "V3__add_test_index.sql").write_text(
+            "CREATE INDEX IF NOT EXISTS idx_test ON tasks(test_col);"
+        )
+
+        # 调 migration runner，目标 v3
+        with sqlite3.connect(str(self.db_path), isolation_level=None) as c:
+            new_v = db._apply_migrations(c, migrations, 1, 3)
+            (final_v,) = c.execute("PRAGMA user_version").fetchone()
+            cols = [r[1] for r in c.execute("PRAGMA table_info(tasks)").fetchall()]
+            idx_count = c.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_test'"
+            ).fetchone()[0]
+
+        self.assertEqual(3, new_v)
+        self.assertEqual(3, final_v)
+        self.assertIn("test_col", cols)
+        self.assertEqual(1, idx_count)
+
+    def test_apply_migrations_skips_already_applied(self):
+        import sqlite3
+        migrations = Path(self._tmp.name) / "migrations"
+        migrations.mkdir()
+        (migrations / "V2__skipped.sql").write_text(
+            "ALTER TABLE tasks ADD COLUMN x TEXT;"  # 如果跑会出错（重跑同列报错）
+        )
+        with sqlite3.connect(str(self.db_path), isolation_level=None) as c:
+            # current=2 已经应用过 V2；目标也是 2 — 不应再跑
+            new_v = db._apply_migrations(c, migrations, 2, 2)
+        self.assertEqual(2, new_v)
+
+    def test_apply_migrations_ignores_files_beyond_target(self):
+        import sqlite3
+        migrations = Path(self._tmp.name) / "migrations"
+        migrations.mkdir()
+        (migrations / "V2__yes.sql").write_text(
+            "ALTER TABLE tasks ADD COLUMN ok TEXT;"
+        )
+        (migrations / "V5__no.sql").write_text(
+            "ALTER TABLE tasks ADD COLUMN should_not_appear TEXT;"
+        )
+        with sqlite3.connect(str(self.db_path), isolation_level=None) as c:
+            new_v = db._apply_migrations(c, migrations, 1, 2)
+            cols = [r[1] for r in c.execute("PRAGMA table_info(tasks)").fetchall()]
+        self.assertEqual(2, new_v)
+        self.assertIn("ok", cols)
+        self.assertNotIn("should_not_appear", cols)
+
+    def test_apply_migrations_missing_dir_is_noop(self):
+        import sqlite3
+        with sqlite3.connect(str(self.db_path), isolation_level=None) as c:
+            new_v = db._apply_migrations(
+                c, Path("/nonexistent/migrations"), 1, 3
+            )
+        self.assertEqual(1, new_v, "missing dir → no-op")
+
     def test_query_blocked_overdue_excludes_non_blocked(self):
         # Tasks that WERE blocked but are now merged shouldn't show up.
         import sqlite3

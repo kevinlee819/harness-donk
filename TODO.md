@@ -102,7 +102,7 @@
 - [x] hooks 单元测试：25 cases，每条规则正反两路
 - [x] `harness init` 集成测试：installs_settings_json / preserves_existing_settings
 - [x] `hooks/notification.sh` — 阶段二 iter 2 完成（needs_decision/task_failed/budget_exceeded 触发；macOS osascript + notify.log）
-- [ ] `hooks/stop.sh` — 完成度强制（需 task state 关联；目前用 `--permission-mode bypassPermissions` 让模型自由结束）
+- [-] `hooks/stop.sh` — 决定**暂不实装**，理由见 [hooks/stop.md](hooks/stop.md)（gate.sh 已是完成度权威 + PreToolUse 已覆盖越界，stop 重复且更弱）
 
 ### 协调者会话
 - [x] `bin/harness-infi` — tmux 新建/复用会话，启动 `claude` 加载 coordinator.md（用 launcher 脚本避开引号灾难）
@@ -201,7 +201,7 @@
 ### 阶段三剩余
 - [-] `adapters/opencode.sh` — `opencode run` 路径（opencode 暂未安装，等用户需要再做）
 - [-] 跨模型审查 calls 记账（2026-06-25 用户决定先不管：codex `cost_usd=null` 本身已是观测黑洞，没好办法解决）
-- [ ] reviewer 选择从「单 backend」升级到 spec 级别（不同 task 不同 reviewer）
+- [x] reviewer 选择从「单 backend」升级到 spec 级别 — spec frontmatter `reviewer:` 字段覆盖 AGENTS.md 全局；`cross_review:` 也可 spec 级开/关；test_gate_cross_review 加 2 cases
 - [ ] 验收：3 个 subtle bug diff 识别率 ≥ 2/3（当前 1/1 命中 — sleep-before-first-attempt 的 retry bug 被精准抓出）
 - [ ] 验收：adapter 合同所有硬门槛满足（capability bitmap、串行锁竞争、超时）
 
@@ -228,13 +228,14 @@
 - [x] `tests/run.sh` — 测试发现（.sh + .py） + 子进程隔离 + 汇总报告
 - [x] `tests/lib/assert.sh` — eq/neq/match/file/json/exit_code 等断言
 - [x] `tests/lib/setup.sh` — make_fixture_project / set_gate_test_cmd / 自动清理
-- [x] **当前规模：18 文件 / 117+ cases / ~36s 全绿**
-   - unit (.sh)：atomic_write 6 / gate 6 / hooks 25 / notify 5 / notification_hook 3 / budget 4 / backup 3 / codex_adapter 5 / gate_cross_review 6
-   - unit (.py)：db (含 events / orphan / blocked-overdue) ~25 / harness_task 11
-   - integration (.sh)：e2e_success 2 / e2e_retry_failed 1 / e2e_blocked_resume 2 / e2e_backend_switch 3 / e2e_orphan_reaper 4 / init_idempotent 5 / harness_infi 4
+- [x] **当前规模：21 文件 / 135+ cases / ~42s 全绿**
+   - unit (.sh)：atomic_write 6 / gate 6 / hooks 25 / notify 5 / notification_hook 3 / budget 4 / backup 3 / claude_adapter 6 / codex_adapter 7 / gate_cross_review 8 / events_cli 4
+   - unit (.py)：db (含 events / orphan / blocked-overdue / migration drill) 29 / harness_task 11
+   - integration (.sh)：e2e_success 2 / e2e_retry_failed 1 / e2e_blocked_resume 2 / e2e_backend_switch 3 / e2e_orphan_reaper 4 / e2e_depends_on 2 / init_idempotent 7 / harness_infi 4
 - [x] orchestrator 孤儿任务回收 + BLOCKED 超时（阶段二 #3）
-- [ ] adapter 单测：claude.sh 真模式错误路径（exit code 非零、非 JSON 输出、timeout）；codex.sh resume by UUID 用 mock 模拟
-- [ ] 真 Claude/Codex 集成（手工，单独 `tests/manual/` 目录，不进 run.sh 默认）
+- [x] adapter 单测：claude.sh 错误路径 + mock 全分支（6 case）；codex.sh resume by UUID mock 验证（7 case）
+- [x] **tests/manual/** 目录建立 — 真模型 smoke（claude / codex / cross_review / coordinator 4 个脚本 + README）；不进 run.sh
+- [x] schema_version 升级框架 + 演练（runner code + 4 drill cases + docs/data-schemas.md §7 重写）
 - [ ] **kill -9 续跑回归测试**：脚本化模拟「跑到一半 kill 编排器 → 重启 → 任务正确续跑」
 
 ### 其他
@@ -250,7 +251,7 @@
 - [ ] **死 worker 阈值**：10 分钟（dead_worker_threshold_min）是否过长/过短？已实装但没真长跑校准；codex 单 turn 可能 1-2 分钟，10min 应该够
 - [ ] **BLOCKED 超时**：72h（blocked_timeout_hours）是否合适？默认值看起来对个人用，但需要长跑数据
 - [ ] **session_resume_cap**：默认 6 轮，需在真实任务跑后校准
-- [ ] **reviewer 默认值**：当前 AGENTS.md.tmpl 默认 `cross_review_reviewer: codex`。原则「写者不审，审者不写」下，用户 `harness init` 默认 worker 是 claude → reviewer codex 是对的。但如果用户拿 codex 当 writer（如 D1），需手动改成 claude。要不要让 `harness init --backend codex` 时自动反转？
+- [x] **reviewer 默认值**：`harness init --backend <writer>` 自动反转 reviewer（claude↔codex），生成者-裁判分离原则保持默认设置即满足
 - [ ] **跨模型审查 cost 记账**：codex `cost_usd=null` + gate.sh 不写 calls 表，跨模型工作流的成本完全不可见。token-based 估算还是单独 reviews 表？（用户说先不管）
 
 ---

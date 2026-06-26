@@ -101,7 +101,12 @@ _log_raw() {
 if [[ -n "${HARNESS_MOCK_ADAPTER:-}" ]]; then
   _acquire_lock || exit 2
   prompt=$(cat "$ADAPTER_TASK_FILE")
-  fake_sid="codex-mock-$(date +%s)"
+  # resume 时保留传入 sid（模拟 codex thread 持久化）；否则生成新 mock sid
+  if [[ -n "$ADAPTER_SESSION_ID" ]]; then
+    fake_sid="$ADAPTER_SESSION_ID"
+  else
+    fake_sid="codex-mock-$(date +%s)"
+  fi
 
   # 复用 mock blocking 钩子，给 cross-model 风格的 mock 也留可观测面
   if [[ -n "${HARNESS_MOCK_BLOCK:-}" ]]; then

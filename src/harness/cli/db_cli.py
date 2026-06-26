@@ -183,6 +183,13 @@ def cmd_query_blocked_overdue(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_get_spec(args: argparse.Namespace) -> int:
+    p = db.get_spec_path(args.task_id)
+    if p is not None:
+        print(p)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="harness-db")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -282,6 +289,10 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("query-blocked-overdue")
     s.add_argument("threshold_hours")
     s.set_defaults(func=cmd_query_blocked_overdue)
+
+    s = sub.add_parser("get-spec")
+    s.add_argument("task_id")
+    s.set_defaults(func=cmd_get_spec)
 
     return p
 

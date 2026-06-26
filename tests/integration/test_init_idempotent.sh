@@ -98,4 +98,38 @@ test_init_non_git_repo_fails() {
   assert_neq 0 "$rc" "non-git should fail"
 }
 
+test_init_with_backend_codex_flips_reviewer() {
+  local d; d=$(make_tmp_dir); track_cleanup "$d"
+  mkdir -p "$d/proj"
+  (
+    cd "$d/proj"
+    git init -q
+    git config user.email t@t
+    git config user.name t
+    git config commit.gpgsign false
+    echo init > r
+    git add . && git commit -qm i
+  )
+  (cd "$d/proj" && "$HARNESS_HOME/bin/harness" init --backend codex >/dev/null 2>&1)
+  local line; line=$(grep "^cross_review_reviewer:" "$d/proj/AGENTS.md")
+  assert_contains "claude" "$line" "--backend codex → reviewer claude"
+}
+
+test_init_default_backend_keeps_codex_reviewer() {
+  local d; d=$(make_tmp_dir); track_cleanup "$d"
+  mkdir -p "$d/proj"
+  (
+    cd "$d/proj"
+    git init -q
+    git config user.email t@t
+    git config user.name t
+    git config commit.gpgsign false
+    echo init > r
+    git add . && git commit -qm i
+  )
+  (cd "$d/proj" && "$HARNESS_HOME/bin/harness" init >/dev/null 2>&1)
+  local line; line=$(grep "^cross_review_reviewer:" "$d/proj/AGENTS.md")
+  assert_contains "codex" "$line" "default (claude writer) → codex reviewer"
+}
+
 run_tests

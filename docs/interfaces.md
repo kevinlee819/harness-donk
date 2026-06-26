@@ -29,17 +29,24 @@ harness-infi [--no-attach] [--backend <name>] [--model <name>]
 ### 1.2 `harness`
 
 ```
-harness setup                         # 一次性环境：校验依赖、建 ~/.config/harness/
-harness doctor                        # 各 backend echo 级自检
-harness init                          # 当前目录 bootstrap：建 .harness/、装模板、登记 projects.list
-harness status [--task <id>] [--history]
-harness attach [<worker_id>]          # attach 到执行平面 tmux
-harness stop [<task_id>|--all]        # 停止任务或全部派发
-harness ls                            # 列出 projects.list 中所有项目
-harness backup                        # sqlite3 .backup
+harness setup                            # 一次性环境：校验依赖、建 ~/.config/harness/
+harness doctor                           # 各 backend echo 级自检（真调 claude + codex）
+harness init [--backend claude|codex]    # 当前目录 bootstrap：建 .harness/、装模板、装 hooks
+                                         # --backend 决定 AGENTS.md 默认 cross_review_reviewer
+                                         # （writer-reviewer 自动反转：claude→codex / codex→claude）
+harness status [--task <id>] [--history] # 任务列表 / 单任务详情 / 迁移史
+harness events pending                   # 列出待处理事件（needs_decision / failed / completed / budget_exceeded）
+harness events ack <eid>...              # 标记事件已交付（防止协调者重复报告）
+harness attach [<worker_id>]             # attach 到 tmux（无参 = 协调者会话）
+harness backup                           # sqlite3 .backup → .harness/backups/harness-<ts>.db
+                                         # 含保留策略（默 7 天，HARNESS_BACKUP_RETAIN_DAYS 可调）
+harness run-once [--mock] [--backend N] [--model M] [--max-retries N]
+                                         # 跑一轮编排器（处理一个任务后退出，调试 / 验收用）
 ```
 
 返回码：0 成功，1 用户错误（缺参等），2 系统错误（依赖缺失、数据库损坏）。
+
+未实现：`stop` / `ls` —— 当前 MVP/iter 1-2 范围未需。
 
 ---
 
@@ -50,15 +57,18 @@ harness backup                        # sqlite3 .backup
 协调者可调脚本。**只对协调者暴露**，是协调者写入任务队列的唯一手段。
 
 ```
-harness-task add --spec <spec_path> [--priority N] [--depends-on T-XXX,...]
-harness-task query [--status <state>] [--task <id>] [--json]
-harness-task cancel <task_id>
-harness-task answer <task_id> <answer_text>   # 写 inbox/<id>.answer
+harness-task add [--id T-XXX] [--priority N] [--depends-on T-A,T-B] [--spec PATH]
+                 # body 走 stdin → 写到 specs/<id>.md（除非 --spec 指向已存在文件）
+harness-task query [--status queued|dispatched|working|gating|blocked|merged|failed]
+                   [--task T-XXX] [--json]
+harness-task history <task_id>          # 状态迁移历史
+harness-task cancel  <task_id>          # 取消未完成任务（→ failed, reason=user_cancelled）
+harness-task answer  <task_id> <text>   # 答复 BLOCKED 状态的任务（写 inbox/<id>.answer）
 ```
 
 - 输入：命令行参数 + stdin（`add` 的 spec body 可走 stdin）。
 - 输出：stdout 一行 JSON `{ok: bool, task_id: "T-XXX", error?: "..."}`。
-- 实现：参数化调 `lib/db.sh` 函数，**绝不让协调者直接拼 SQL**。
+- 实现：薄 shim 调 `python -m harness.cli.harness_task`，**绝不让协调者直接拼 SQL**（CLAUDE.md §8.1 语言边界）。
 
 ### 2.2 `coordinator/coordinator.md`
 

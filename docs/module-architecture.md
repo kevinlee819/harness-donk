@@ -30,37 +30,52 @@
 │       └── harness-task                # 薄 shim：exec python3 -m harness.cli.harness_task
 │
 ├── adapters/                           # backend 归一化层（bash）
-│   └── claude.sh                       # codex/opencode 待补
+│   ├── claude.sh
+│   └── codex.sh                        # opencode 暂未做
 │
 ├── lib/                                # 可复用 bash 函数库（被 source）
 │   ├── atomic_write.sh                 # 原子写 JSON
-│   ├── gate.sh                         # 校验门多步骤执行
+│   ├── gate.sh                         # 校验门多步骤执行（含 cross_review）
+│   ├── notify.sh                       # events 表 + JSON 文件 + 通知 hook 三路出口
+│   ├── budget.sh                       # 预算闸（手算只读）
 │   └── python_env.sh                   # bash → python 桥：设 $HARNESS_PYTHON + PYTHONPATH
 │
 ├── hooks/                              # 安装到项目 .claude/settings.json 的钩子脚本
-│   └── pre_tool_use.sh                 # 危险命令拦截（stderr + exit 2）
+│   ├── pre_tool_use.sh                 # 危险命令拦截（stderr + exit 2）
+│   └── notification.sh                 # 事件桌面通知 + notify.log
 │
 ├── templates/                          # harness init 时拷贝/渲染到项目
-│   ├── AGENTS.md.tmpl
+│   ├── AGENTS.md.tmpl                  # 含 gate 块 + cross_review_reviewer
 │   ├── settings.json.tmpl              # .claude/settings.json hooks 注册
 │   └── gitignore-fragment
 │
 ├── schema/                             # 数据契约
-│   └── harness.sql                     # SQLite DDL（建表 + PRAGMA + 版本）
+│   ├── harness.sql                     # SQLite DDL（建表 + PRAGMA + 版本）
+│   └── migrations/                     # 增量迁移文件 V<N>__<desc>.sql
+│       └── README.md
 │
 └── tests/
     ├── run.sh                          # 测试入口，发现 .sh + .py
     ├── lib/{assert.sh, setup.sh}       # bash 测试辅助
-    ├── unit/
-    │   ├── test_atomic_write.sh
-    │   ├── test_db.py                  # Python unittest
-    │   ├── test_gate.sh
-    │   ├── test_harness_task.py        # Python unittest
-    │   └── test_hooks.sh
-    └── integration/
-        ├── test_e2e_success.sh
-        ├── test_e2e_retry_failed.sh
-        └── test_init_idempotent.sh
+    ├── unit/                           # 全部 mock，CI 跑
+    │   ├── test_atomic_write.sh / test_gate.sh / test_hooks.sh
+    │   ├── test_notify.sh / test_notification_hook.sh
+    │   ├── test_budget.sh / test_backup.sh / test_events_cli.sh
+    │   ├── test_claude_adapter.sh / test_codex_adapter.sh
+    │   ├── test_gate_cross_review.sh
+    │   ├── test_db.py                  # 30+ cases 含 migration drill
+    │   └── test_harness_task.py
+    ├── integration/                    # e2e mock，CI 跑
+    │   ├── test_e2e_success.sh / test_e2e_retry_failed.sh
+    │   ├── test_e2e_blocked_resume.sh / test_e2e_orphan_reaper.sh
+    │   ├── test_e2e_backend_switch.sh / test_e2e_depends_on.sh
+    │   ├── test_init_idempotent.sh / test_harness_infi.sh
+    └── manual/                         # 真模型调用，手动跑，不进 CI
+        ├── README.md
+        ├── smoke_real_claude.sh
+        ├── smoke_real_codex.sh
+        ├── smoke_real_cross_review.sh
+        └── smoke_coordinator.sh
 ```
 
 **语言边界**：调子进程/拼命令的薄层用 bash；碰 SQL/状态机/JSON-schema 的用 Python（`src/harness/`）。详见 [CLAUDE.md §8.1](../CLAUDE.md)。
@@ -79,10 +94,12 @@
 | M6 | 文件黑板 | `lib/atomic_write.sh` + `schema/json/` | worker 与人 → 编排器的写入界面 | 见 §4 |
 | M7 | 校验门 | `lib/gate.sh` | 多步骤检查 → `.gate-report.json` | gate 进程 |
 | M8 | 安全 hooks | `hooks/` | 项目 `.claude/settings.json` 注册，确定性拦截 | hook 进程 |
-| M9 | 通知路由 | `lib/notify.sh` + `hooks/notification.sh` | 待决策 / 完成 / 故障事件上抛协调者 | notify 进程 |
-| M10 | 成本闸 | `lib/budget.sh` | 累计 + 超限 kill switch | 编排器调用 |
-| M11 | 项目初始化 | `bin/harness init` + `templates/` | bootstrap 新项目至「可校验」状态 | 初始化脚本 |
-| M12 | 日志 | `lib/log.sh` | 调用 JSON 留档 `logs/raw/` | log 进程 |
+| M9 | 通知路由 | `lib/notify.sh` + `hooks/notification.sh` | events 表 + JSON 文件 + 桌面通知（pull-on-re-engagement，见 coordinator.md §2.2） | notify 进程 |
+| M10 | 成本闸 | `lib/budget.sh` + orchestrator `_budget_guard` | 累计 + 超限 kill switch + budget_exceeded 事件 | 编排器调用 |
+| M11 | 项目初始化 | `bin/harness init` + `templates/` | bootstrap 新项目；`--backend` 反转默认 reviewer | 初始化脚本 |
+| M12 | 调用日志 | adapter 内 `_log_raw` | 调用 JSON 落 `logs/raw/`（含 envelope）| adapter 进程 |
+| M13 | 孤儿回收 | orchestrator `_reap_orphans` + `_timeout_blocked` | 单进程下崩溃残留任务自愈 + BLOCKED 超时回收 | 编排器调用 |
+| M14 | 备份 | `bin/harness backup` + 合并节点自动钩 | sqlite3 `.backup` + 保留策略（默 7 天） | bin/harness |
 
 ## 3. 依赖关系图（自下而上）
 
