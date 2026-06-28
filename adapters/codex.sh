@@ -34,7 +34,7 @@ ADAPTER_NAME="codex"
 ADAPTER_CAP_SESSION_RESUME=1                   # codex exec resume <uuid|--last>
 ADAPTER_CAP_SESSION_ID_PROGRAMMATIC=1          # thread_id 从 thread.started 事件可取（codex 0.142+）
 ADAPTER_CAP_TOOL_PERMISSION=1                  # --sandbox + --ask-for-approval
-ADAPTER_CAP_COST_REPORT=0                      # JSON 只给 token usage，无 USD
+ADAPTER_CAP_COST_REPORT=1                      # USD 自算：token × schema/model-prices.json（详见 src/harness/usage.py）
 ADAPTER_PARALLEL_PER_WORKTREE=0                # 必须串行（避开 git index 竞争）
 
 : "${ADAPTER_TASK_FILE:?ADAPTER_TASK_FILE required}"
@@ -220,18 +220,49 @@ fi
 
 start_ms=$(python3 -c 'import time;print(int(time.time()*1000))')
 
-set +e
-timeout "$ADAPTER_TIMEOUT" codex "${_args[@]}" < "$ADAPTER_TASK_FILE" > "$EVENTS" 2>"$ADAPTER_WORKTREE/.adapter.stderr"
-EXIT=$?
-set -e
+# Fixture 注入：测试可传 HARNESS_CODEX_EVENTS_FIXTURE=<jsonl 文件> 跳过真 codex 调用，
+# 直接用该文件作为 events 源。仅用于测试解析 + 价目折算管线。
+if [[ -n "${HARNESS_CODEX_EVENTS_FIXTURE:-}" && -f "$HARNESS_CODEX_EVENTS_FIXTURE" ]]; then
+  cp "$HARNESS_CODEX_EVENTS_FIXTURE" "$EVENTS"
+  EXIT=0
+else
+  set +e
+  timeout "$ADAPTER_TIMEOUT" codex "${_args[@]}" < "$ADAPTER_TASK_FILE" > "$EVENTS" 2>"$ADAPTER_WORKTREE/.adapter.stderr"
+  EXIT=$?
+  set -e
+fi
 
 end_ms=$(python3 -c 'import time;print(int(time.time()*1000))')
 duration=$((end_ms - start_ms))
 
 # 解析 JSONL：抓 turn.completed 数、最后 agent_message、thread_id
-turns=$(grep -c '"type":"turn.completed"' "$EVENTS" 2>/dev/null || echo 0)
+turns=$(grep -c '"type":"turn.completed"' "$EVENTS" 2>/dev/null || true)
+[[ -z "$turns" ]] && turns=0
 thread_id=$(jq -r 'select(.type=="thread.started") | .thread_id' "$EVENTS" 2>/dev/null | head -1)
 [[ -z "$thread_id" || "$thread_id" == "null" ]] && thread_id=""
+
+# Token usage：汇总所有 turn.completed.usage（codex JSONL 每轮一条）。
+# 字段（codex 0.142+ / OpenAI Responses 风格）：
+#   input_tokens (含 cached_input_tokens), cached_input_tokens,
+#   output_tokens (含 reasoning_output_tokens), reasoning_output_tokens
+# OpenAI 约定：cached 是 input 的子集 —— 计算时要先减去。
+read_in=$(jq -s '[.[] | select(.type=="turn.completed") | .usage.input_tokens // 0] | add // 0' "$EVENTS" 2>/dev/null || echo 0)
+read_cached=$(jq -s '[.[] | select(.type=="turn.completed") | .usage.cached_input_tokens // 0] | add // 0' "$EVENTS" 2>/dev/null || echo 0)
+read_out=$(jq -s '[.[] | select(.type=="turn.completed") | .usage.output_tokens // 0] | add // 0' "$EVENTS" 2>/dev/null || echo 0)
+non_cached_in=$((read_in - read_cached))
+[[ $non_cached_in -lt 0 ]] && non_cached_in=0
+
+# 调 harness.usage 折算 USD。模型未知或 token 全 0 时输出 'null' —— 保留 null 别填假数。
+cost_usd_str="null"
+if [[ -n "$ADAPTER_MODEL" && $((non_cached_in + read_cached + read_out)) -gt 0 ]]; then
+  _ph="$HARNESS_HOME/lib/python_env.sh"
+  if [[ -f "$_ph" ]]; then
+    # shellcheck source=/dev/null
+    source "$_ph"
+    cost_usd_str=$("$HARNESS_PYTHON" -m harness.usage codex "$ADAPTER_MODEL" \
+      "input=$non_cached_in" "output=$read_out" "cache_read=$read_cached" 2>/dev/null || echo null)
+  fi
+fi
 
 # 取最后一条 agent_message 文本
 final_text=$(jq -r 'select(.type=="item.completed" and .item.type=="agent_message") | .item.text' \
@@ -259,5 +290,6 @@ fi
 changed=$(_count_files_changed)
 jq -nc --arg sid "$thread_id" --arg r "$final_text" --argjson turns "${turns:-0}" \
        --argjson fc "${changed:-0}" --argjson dur "$duration" \
+       --argjson cost "${cost_usd_str:-null}" \
   '{ok:true, session_id:(if $sid=="" then null else $sid end), result:$r,
-    cost_usd:null, num_turns:$turns, files_changed:$fc, duration_ms:$dur, error:null}'
+    cost_usd:$cost, num_turns:$turns, files_changed:$fc, duration_ms:$dur, error:null}'

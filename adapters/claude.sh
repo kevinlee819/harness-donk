@@ -206,6 +206,26 @@ sid=$(printf '%s' "$RESP" | jq -r '.session_id // ""')
 result=$(printf '%s' "$RESP" | jq -r '.result // ""')
 cost=$(printf '%s' "$RESP" | jq -r '.total_cost_usd // .cost_usd // null')
 turns=$(printf '%s' "$RESP" | jq -r '.num_turns // null')
+
+# Shadow USD：CLI 没报（订阅/OAuth max 模式 total_cost_usd 字段缺失）时，按
+# token × schema/model-prices.json 自算。HARNESS_SHADOW_USD=1 强制走自算路径
+# （即便 CLI 报了 0），用于「订阅模式想看等价 API 成本」的场景。
+if [[ "$cost" == "null" || -n "${HARNESS_SHADOW_USD:-}" ]]; then
+  u_in=$(printf '%s' "$RESP" | jq -r '.usage.input_tokens // 0' 2>/dev/null || echo 0)
+  u_out=$(printf '%s' "$RESP" | jq -r '.usage.output_tokens // 0' 2>/dev/null || echo 0)
+  u_cread=$(printf '%s' "$RESP" | jq -r '.usage.cache_read_input_tokens // 0' 2>/dev/null || echo 0)
+  u_cwrite=$(printf '%s' "$RESP" | jq -r '.usage.cache_creation_input_tokens // 0' 2>/dev/null || echo 0)
+  if [[ -n "$ADAPTER_MODEL" && $((u_in + u_out + u_cread + u_cwrite)) -gt 0 ]]; then
+    _ph="$HARNESS_HOME/lib/python_env.sh"
+    if [[ -f "$_ph" ]]; then
+      # shellcheck source=/dev/null
+      source "$_ph"
+      cost=$("$HARNESS_PYTHON" -m harness.usage claude "$ADAPTER_MODEL" \
+        "input=$u_in" "output=$u_out" "cache_read=$u_cread" "cache_write=$u_cwrite" 2>/dev/null || echo null)
+    fi
+  fi
+fi
+
 changed=$(_count_files_changed)
 
 jq -nc --arg sid "$sid" --arg result "$result" --argjson cost "${cost:-null}" \
