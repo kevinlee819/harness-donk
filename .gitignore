@@ -30,3 +30,6 @@ specs/
 
 # 临时 scratch（贴文档 / 录调试输出用，非源码）
 /tmp/
+
+# 开发期实时进度跟踪（Claude 维护，不公开发布）
+/TODO.md
