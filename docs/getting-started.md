@@ -219,7 +219,7 @@ harness help                       # 帮助
 
 两种方式，二选一。
 
-### 4.1 一行装（推荐，仓库公开后可用）
+### 4.1 脚本一键安装
 
 ```bash
 curl -LsSf https://raw.githubusercontent.com/kevinlee819/harness-donk/main/install.sh | bash
@@ -566,7 +566,7 @@ harness run-once [--mock]        # 跑一轮编排器后退出（手动调试用
 harness help
 ```
 
-### 协调者用的工具（你不直接调，但知道存在）
+### 协调者用的工具
 
 ```bash
 harness-task add [--id T-XXX] [--priority N] [--depends-on T-A,T-B]
