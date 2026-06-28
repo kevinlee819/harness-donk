@@ -69,4 +69,4 @@ harness-infi             # 启动协调者，开始干活
 
 ## License
 
-[你想加哪个就加哪个]
+MIT — 见 [LICENSE](LICENSE)
