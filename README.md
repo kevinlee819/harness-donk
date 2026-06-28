@@ -27,10 +27,10 @@
 
 ```bash
 # 1. 装（一行；自动检系统依赖 / 自动装 uv / 自动设 PATH）
-curl -LsSf https://raw.githubusercontent.com/USER/harness-donk/main/install.sh | bash
+curl -LsSf https://raw.githubusercontent.com/kevinlee819/harness-donk/main/install.sh | bash
 
 # 或：已 clone 的情况
-git clone https://github.com/USER/harness-donk.git && cd harness-donk && ./install.sh
+git clone https://github.com/kevinlee819/harness-donk.git && cd harness-donk && ./install.sh
 
 # 2. 自检 backend（真烧少量 API）
 harness doctor
