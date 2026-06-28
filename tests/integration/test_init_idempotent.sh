@@ -29,6 +29,31 @@ test_init_creates_expected_files() {
   [[ -d "$d/.harness/inbox" ]]   || _assert_fail "inbox/"
   [[ -d "$d/.harness/logs/raw" ]] || _assert_fail "logs/raw/"
   [[ -d "$d/specs" ]]            || _assert_fail "specs/"
+
+  # 知识层文件（参照 project-harness 思想；worker 在 AGENTS.md 必读列表里读它们）
+  assert_file_exists "$d/docs/decisions.md"
+  assert_file_exists "$d/docs/error-journal.md"
+  assert_contains "决策记录" "$(cat "$d/docs/decisions.md")"
+  assert_contains "错误日志" "$(cat "$d/docs/error-journal.md")"
+}
+
+test_init_preserves_existing_knowledge_files() {
+  # 用户在 docs/decisions.md 已经记了东西，重跑 init 不应覆盖
+  local d; d=$(make_tmp_dir); track_cleanup "$d"
+  cd "$d"
+  git init -q && git config user.email t@t && git config user.name t
+  git config commit.gpgsign false
+  echo "# proj" > README.md && git add . && git commit -q -m init
+
+  mkdir -p "$d/docs"
+  echo "## 2025-01-01: 用户已经记的决策" > "$d/docs/decisions.md"
+  echo "## 2025-01-01: 用户已经记的坑"   > "$d/docs/error-journal.md"
+
+  "$HARNESS_HOME/bin/harness" init >/dev/null 2>&1
+
+  # 内容应保留
+  assert_contains "用户已经记的决策" "$(cat "$d/docs/decisions.md")"
+  assert_contains "用户已经记的坑"   "$(cat "$d/docs/error-journal.md")"
 }
 
 test_init_idempotent_no_overwrite() {

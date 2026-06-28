@@ -1,0 +1,64 @@
+# 错误日志 / Error Journal
+
+记录本项目**反复踩过的坑**及其修法，让未来的 agent / worker 避开。
+
+## 为什么需要这份文件
+
+LLM 在不同 session 里会反复犯同一种错误（典型：对某个库的 API 误用、某个测试夹具的隐含约定、某个工具链的版本陷阱）。没有持久化的话，每次都靠 gate.sh 把它打回去重写，浪费 token + 时间。把"已知的坑"记下来，worker 在 spec 里能直接看到，绕开。
+
+worker 在开始任务前会读本文件。
+
+## 什么进、什么不进
+
+**进**：
+
+- gate 失败的**根因**（不是失败现象本身，是为什么会这样）
+- 同一类错误反复出现过 2 次以上
+- 跨任务都可能复现的陷阱
+- 暂时的 workaround + TODO（标 `[WORKAROUND]`）
+
+**不进**：
+
+- 一次性的失误（属于该任务本身的 retry，已被 gate 处理）
+- 还在调试中的疑问（先在 spec 备注里写，定性之后再进 journal）
+- 代码注释里说清楚就够的事
+
+## 格式
+
+每条按时间倒序写一段：
+
+```
+## YYYY-MM-DD: <一句话现象>
+
+- 触发：<哪类任务/操作会撞上>
+- 现象：<会看到的错误信息或测试输出>
+- 根因：<真正的原因，不是表面错误>
+- 修法：<下次怎么做>
+- 状态：fixed / [WORKAROUND]
+```
+
+## 示例
+
+```
+## 2026-01-20: pytest fixture 顺序导致 db 测试间污染
+
+- 触发：写新测试时引入 fixture 但顺序不对
+- 现象：单独跑某测试通过，全套跑某些用例 FAIL（特定顺序下）
+- 根因：`db_session` fixture 依赖 `engine` fixture，但 conftest 里写反了
+- 修法：所有 db 相关测试必须在文件头写 `pytestmark = pytest.mark.usefixtures("clean_db")`
+- 状态：fixed
+```
+
+```
+## 2026-02-03: [WORKAROUND] aiohttp 3.9 在 macOS 上 keep-alive 偶发 hang
+
+- 触发：跑集成测试时偶发挂住 ≥ 30s
+- 现象：测试无 timeout，最后 CI 整体超时
+- 根因：aiohttp 3.9.x + macOS launchd 网络栈交互 bug（上游已报 #8421）
+- 修法：每个 session 用完显式 `await session.close()`，且 `connector_owner=True`
+- 状态：[WORKAROUND] —— 等 aiohttp 3.10 修复后回滚
+```
+
+---
+
+<!-- 在此追加新条目 -->

@@ -49,6 +49,16 @@ cmd_init() {
   fi
   [[ ! -L "$cwd/CLAUDE.md" && ! -f "$cwd/CLAUDE.md" ]] && ln -s AGENTS.md "$cwd/CLAUDE.md"
 
+  # docs/decisions.md + docs/error-journal.md：项目级知识沉淀（参照 project-harness）
+  # 已存在则不覆盖（人写的内容不能被工具盖掉）
+  mkdir -p "$cwd/docs"
+  for kf in decisions error-journal; do
+    if [[ ! -f "$cwd/docs/${kf}.md" ]]; then
+      cp "$HARNESS_HOME/templates/${kf}.md.tmpl" "$cwd/docs/${kf}.md"
+      echo "created docs/${kf}.md"
+    fi
+  done
+
   if ! grep -q '^\.harness/' "$cwd/.gitignore" 2>/dev/null; then
     cat "$HARNESS_HOME/templates/gitignore-fragment" >> "$cwd/.gitignore"
   fi

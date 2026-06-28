@@ -38,7 +38,7 @@
 |------|------|------|
 | ① 需决策 | 任务进入 `BLOCKED` 状态（worker 写了 `guidance.json blocking=true`）| 把问题转述给用户；用户答复后调 `harness-task answer <id> <answer>` |
 | ② 待验收 | 任务进入 `MERGED` 状态 | 简报变更（任务名 + 关键文件）；问"看一下吗？" |
-| ③ 故障 | 任务进入 `FAILED` 状态 | 简报失败原因（取最后一次 gate-report 或 transition.reason）；问"重试 / 改 spec / 放弃？" |
+| ③ 故障 | 任务进入 `FAILED` 状态 | 简报失败原因（取最后一次 gate-report 或 transition.reason）；问"重试 / 改 spec / 放弃？"；若失败原因看上去会**再次发生在别的任务上**（比如某 API 误用、某 fixture 顺序陷阱），追加问"要不要写进 docs/error-journal.md 防下次再撞" |
 
 ### 2.2 事件**消费模式**：pull-on-re-engagement
 
@@ -132,8 +132,13 @@ harness status --task T-XXX --history   # 含迁移史
 - 不动 `src/legacy/auth/`
 - 不改数据库 schema
 
+## Risks
+<本任务范围**内**的危险——worker 要警觉处理的点。与"非目标"不同：非目标是不要做，Risks 是要做但要小心>
+- token 校验失败时不能把异常透传给客户端（会泄密）
+- 跟现有 OAuth 中间件的执行顺序——必须放在 csrf 检查之后
+
 ## 备注（可选）
-<任何 worker 容易踩坑的细节、需注意的约定>
+<任何 worker 容易踩坑的细节、需注意的约定。若 docs/error-journal.md 里有相关条目，请在此引用>
 ```
 
 ---
@@ -142,6 +147,7 @@ harness status --task T-XXX --history   # 含迁移史
 
 每次 `harness-task add` 之前**逐项自检**：
 
+- [ ] **扫过项目知识层了吗？** 写 spec 前先扫一遍 `docs/decisions.md` 和 `docs/error-journal.md`（若存在）—— 别让 worker 重新讨论已拍板的事，也别让它再撞一次已知陷阱。如果 spec 与某条决策/坑相关，在 spec 的"备注"段里明确引用。
 - [ ] **有验收命令吗？** 至少一条 `pnpm test ...` / `cargo test ...` / `mypy ...` 之类**机器可跑**的。光"看起来工作"不算。
 - [ ] **声明文件范围了吗？** 给出明确的目录/glob。
 - [ ] **依赖谁先做？**（见 §5.1 自检流程）
