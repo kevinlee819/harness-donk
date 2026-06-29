@@ -18,11 +18,51 @@ source "$HARNESS_HOME/lib/python_env.sh"
 
 _db() { "$HARNESS_PYTHON" -m harness.cli.db_cli "$@"; }
 
+# ── project-type detection helpers ───────────────────────
+_detect_project_type() {
+  [[ -f pyproject.toml || -f requirements.txt || -f setup.py ]] && echo python && return
+  [[ -f package.json ]] && echo node && return
+  [[ -f go.mod ]] && echo go && return
+  [[ -f Cargo.toml ]] && echo rust && return
+  [[ -f pom.xml || -f build.gradle || -f build.gradle.kts ]] && echo java && return
+  [[ -f Gemfile ]] && echo ruby && return
+  echo unknown
+}
+
+_gate_defaults() {
+  local type="$1"
+  local test_cmd="" lint_cmd="" build_cmd=""
+  case "$type" in
+    python)
+      test_cmd="pytest"
+      grep -qs "ruff" pyproject.toml 2>/dev/null && lint_cmd="ruff check ." || lint_cmd="flake8"
+      ;;
+    node)
+      if [[ -f package.json ]]; then
+        jq -e '.scripts.test'  package.json &>/dev/null && test_cmd="npm test"
+        jq -e '.scripts.lint'  package.json &>/dev/null && lint_cmd="npm run lint"
+        jq -e '.scripts.build' package.json &>/dev/null && build_cmd="npm run build"
+      fi
+      ;;
+    go)   test_cmd="go test ./..."; build_cmd="go build ./..."; lint_cmd="go vet ./..." ;;
+    rust) test_cmd="cargo test";    build_cmd="cargo build";    lint_cmd="cargo clippy" ;;
+    ruby) test_cmd="bundle exec rspec"; lint_cmd="bundle exec rubocop" ;;
+  esac
+  echo "test=$test_cmd"
+  echo "lint=$lint_cmd"
+  echo "build=$build_cmd"
+}
+
+_count_project_files() {
+  find . -maxdepth 3 -type f \
+    ! -path './.git/*' ! -name '.gitignore' ! -name 'README.md' \
+    ! -name 'LICENSE' ! -name '.DS_Store' 2>/dev/null | wc -l | tr -d ' '
+}
+
 cmd="${1:-help}"; shift || true
 
 cmd_init() {
   local cwd; cwd=$(pwd)
-  # 解析 --backend：决定默认 reviewer（生成者-裁判分离原则六；writer != reviewer）
   local writer="claude"
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -34,27 +74,82 @@ cmd_init() {
   case "$writer" in
     claude) reviewer="codex" ;;
     codex)  reviewer="claude" ;;
-    *)      reviewer="codex" ;;   # 未知 backend 默认 codex 作 reviewer
+    *)      reviewer="codex" ;;
   esac
 
+  # ── 1. ensure git repo ───────────────────────────────────
   if [[ ! -d "$cwd/.git" ]]; then
-    echo "error: not a git repo: $cwd" >&2
-    echo "" >&2
-    echo "harness requires a git repository. To set one up:" >&2
-    echo "  git init" >&2
-    echo "  git commit --allow-empty -m 'init'   # or: add a file first" >&2
-    echo "  harness init" >&2
-    exit 1
+    echo "No git repository found — initializing one." >&2
+    git init -q
   fi
+  # worktrees need at least one commit
+  if ! git rev-parse HEAD &>/dev/null; then
+    git -c commit.gpgsign=false commit -q --allow-empty -m "init"
+  fi
+
   if [[ -f "$cwd/.harness/harness.db" ]]; then
     echo "already initialized" >&2; return 0
   fi
+
+  # ── 2. detect project type & gate defaults ───────────────
+  local proj_type; proj_type=$(_detect_project_type)
+  local nfiles;    nfiles=$(_count_project_files)
+  local test_cmd="" lint_cmd="" build_cmd="" project_idea=""
+
+  while IFS='=' read -r _k _v; do
+    case "$_k" in test) test_cmd="$_v" ;; lint) lint_cmd="$_v" ;; build) build_cmd="$_v" ;; esac
+  done < <(_gate_defaults "$proj_type")
+
+  # ── 3. interactive setup (only when stdin is a TTY) ──────
+  if [[ -t 0 ]]; then
+    if [[ "$nfiles" -lt 3 && "$proj_type" == unknown ]]; then
+      # PATH A: brand-new empty project — full guided wizard
+      echo ""
+      echo "This looks like a new project — let's set it up."
+      echo ""
+      read -r -p "What do you want to build? (brief description): " project_idea
+      echo ""
+      echo "What language/framework?"
+      echo "  1) Python"
+      echo "  2) Node.js / TypeScript"
+      echo "  3) Go"
+      echo "  4) Rust"
+      echo "  5) Other (I'll configure manually)"
+      read -r -p "Choice [1-5]: " _choice
+      case "$_choice" in
+        1) proj_type=python ;; 2) proj_type=node ;; 3) proj_type=go ;;
+        4) proj_type=rust   ;; *) proj_type=unknown ;;
+      esac
+      while IFS='=' read -r _k _v; do
+        case "$_k" in test) test_cmd="$_v" ;; lint) lint_cmd="$_v" ;; build) build_cmd="$_v" ;; esac
+      done < <(_gate_defaults "$proj_type")
+    fi
+
+    # Show proposed gate config and let user confirm / override
+    echo ""
+    [[ "$proj_type" != unknown ]] && echo "Detected: $proj_type project."
+    echo "Proposed gate configuration:"
+    printf "  test:  %s\n" "${test_cmd:-(none)}"
+    printf "  lint:  %s\n" "${lint_cmd:-(none)}"
+    printf "  build: %s\n" "${build_cmd:-(none)}"
+    echo ""
+    read -r -p "Does this look right? [Y/n]: " _ok
+    if [[ "$_ok" =~ ^[Nn] ]]; then
+      local _v
+      read -r -p "  test  [${test_cmd}]: "  _v; [[ -n "$_v" ]] && test_cmd="$_v"
+      read -r -p "  lint  [${lint_cmd}]: "  _v; [[ -n "$_v" ]] && lint_cmd="$_v"
+      read -r -p "  build [${build_cmd}]: " _v; [[ -n "$_v" ]] && build_cmd="$_v"
+    fi
+  fi
+  # (non-interactive: silently use detected defaults)
+
+  # ── 4. scaffold .harness/ ────────────────────────────────
   mkdir -p "$cwd/.harness/workers" "$cwd/.harness/inbox" "$cwd/.harness/events" \
            "$cwd/.harness/logs/raw" "$cwd/specs"
   export HARNESS_DB="$cwd/.harness/harness.db"
   _db init || { echo "db init failed" >&2; exit 1; }
 
-  # Pick locale-specific template dir; fall back to root templates/ if absent.
+  # ── 5. generate AGENTS.md with gate config filled in ─────
   local lang="${HARNESS_LANG:-en}"
   local tmpl_dir="$HARNESS_HOME/templates/$lang"
   [[ -d "$tmpl_dir" ]] || tmpl_dir="$HARNESS_HOME/templates"
@@ -62,18 +157,17 @@ cmd_init() {
   if [[ ! -f "$cwd/AGENTS.md" ]]; then
     sed -e "s/{{PROJECT_NAME}}/$(basename "$cwd")/g" \
         -e "s/^cross_review_reviewer: codex$/cross_review_reviewer: $reviewer/" \
+        -e "s#build: \"\"#build: \"${build_cmd}\"#" \
+        -e "s#lint: \"\"#lint: \"${lint_cmd}\"#" \
+        -e "s#test: \"\"#test: \"${test_cmd}\"#" \
         "$tmpl_dir/AGENTS.md.tmpl" > "$cwd/AGENTS.md"
-    echo "configured cross_review_reviewer: $reviewer (writer=$writer)"
   fi
   [[ ! -L "$cwd/CLAUDE.md" && ! -f "$cwd/CLAUDE.md" ]] && ln -s AGENTS.md "$cwd/CLAUDE.md"
 
-  # docs/decisions.md + docs/error-journal.md — project knowledge layer.
-  # Never overwrite if the file already exists (user content must not be clobbered).
   mkdir -p "$cwd/docs"
   for kf in decisions error-journal; do
     if [[ ! -f "$cwd/docs/${kf}.md" ]]; then
       cp "$tmpl_dir/${kf}.md.tmpl" "$cwd/docs/${kf}.md"
-      echo "created docs/${kf}.md"
     fi
   done
 
@@ -81,20 +175,17 @@ cmd_init() {
     cat "$HARNESS_HOME/templates/gitignore-fragment" >> "$cwd/.gitignore"
   fi
 
-  # 安装 .claude/settings.json hooks
   mkdir -p "$cwd/.claude"
   local settings_path="$cwd/.claude/settings.json"
   local rendered
   rendered=$(sed "s|{{HARNESS_HOME}}|$HARNESS_HOME|g" "$HARNESS_HOME/templates/settings.json.tmpl")
   if [[ ! -f "$settings_path" ]]; then
     printf '%s\n' "$rendered" > "$settings_path"
-    echo "installed .claude/settings.json (hooks registered)"
   else
     printf '%s\n' "$rendered" > "$settings_path.harness-suggested"
     echo "WARNING: .claude/settings.json exists; suggested hooks written to .claude/settings.json.harness-suggested — merge manually" >&2
   fi
 
-  # 登记到 ~/.config/harness/projects.list（design §10.3）— 幂等
   local conf_dir="${HARNESS_CONFIG_DIR:-$HOME/.config/harness}"
   mkdir -p "$conf_dir"
   local plist="$conf_dir/projects.list"
@@ -103,8 +194,22 @@ cmd_init() {
     echo "$cwd" >> "$plist"
   fi
 
+  # ── 6. save initial idea as first spec ───────────────────
+  if [[ -n "$project_idea" ]]; then
+    printf '# Initial Idea\n\n%s\n\n---\n*Created by `harness init`*\n' \
+      "$project_idea" > "$cwd/specs/initial.md"
+    echo "saved your idea to specs/initial.md"
+  fi
+
+  echo ""
   echo "harness initialized in $cwd"
-  echo "next: edit AGENTS.md to fill gate commands (test/lint/build)"
+  if [[ -n "$project_idea" ]]; then
+    echo "next: run 'harness-infi' — your idea is in specs/initial.md"
+  else
+    echo "next: run 'harness-infi' to start"
+    [[ -z "$test_cmd$lint_cmd$build_cmd" ]] && \
+      echo "tip:  edit AGENTS.md to fill in gate commands (test/lint/build)"
+  fi
 }
 
 cmd_status() {

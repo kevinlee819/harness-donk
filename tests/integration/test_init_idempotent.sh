@@ -121,14 +121,14 @@ test_init_preserves_existing_settings() {
   assert_file_exists "$d/.claude/settings.json.harness-suggested"
 }
 
-test_init_non_git_repo_fails() {
+test_init_auto_inits_git_repo() {
   local d; d=$(make_tmp_dir); track_cleanup "$d"
   cd "$d"
-  set +e
-  "$HARNESS_HOME/bin/harness" init 2>/dev/null
-  local rc=$?
-  set -e
-  assert_neq 0 "$rc" "non-git should fail"
+  # No prior git init — harness should create the repo automatically
+  "$HARNESS_HOME/bin/harness" init </dev/null >/dev/null 2>&1
+  [[ -d "$d/.git" ]] || _assert_fail "harness init should auto git-init"
+  assert_file_exists "$d/AGENTS.md"
+  assert_file_exists "$d/.harness/harness.db"
 }
 
 test_init_with_backend_codex_flips_reviewer() {
