@@ -294,6 +294,7 @@ class WorkerThread(threading.Thread):
 
     # ── job entry points ───────────────────────────────
     def _run_initial(self) -> None:
+        import shutil
         j = self.job
         worktree = j.worktree_base / j.task_id
         branch = f"harness/{j.task_id}"
@@ -301,16 +302,30 @@ class WorkerThread(threading.Thread):
         log.info("[%s] claim %s (%s)", j.worker_id, j.task_id, j.spec_path)
 
         if worktree.exists():
-            log.info("[%s] worktree exists, reusing: %s", j.worker_id, worktree)
-        else:
-            r = subprocess.run(
-                ["git", "-C", str(j.project_dir), "worktree", "add", "-B", branch, str(worktree)],
+            # Stale worktree from a previous failed/conflict attempt.
+            # Reusing old commits causes repeated merge conflicts — remove and
+            # recreate so the retry starts from a clean main-branch snapshot.
+            log.info("[%s] removing stale worktree for clean retry: %s", j.worker_id, worktree)
+            subprocess.run(
+                ["git", "-C", str(j.project_dir), "worktree", "remove", "--force", str(worktree)],
                 capture_output=True, text=True,
             )
-            if r.returncode != 0:
-                log.error("[%s] git worktree add failed: %s", j.worker_id, r.stderr)
-                db.transition(j.task_id, "failed", "worktree_add_failed")
-                return
+            if worktree.exists():  # worktree remove failed (e.g. open handles)
+                shutil.rmtree(str(worktree), ignore_errors=True)
+            # Delete the branch so -B re-creates it fresh from HEAD
+            subprocess.run(
+                ["git", "-C", str(j.project_dir), "branch", "-D", branch],
+                capture_output=True, text=True,
+            )
+
+        r = subprocess.run(
+            ["git", "-C", str(j.project_dir), "worktree", "add", "-B", branch, str(worktree)],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            log.error("[%s] git worktree add failed: %s", j.worker_id, r.stderr)
+            db.transition(j.task_id, "failed", "worktree_add_failed")
+            return
 
         db.set_branch(j.task_id, branch)
         db.transition(j.task_id, "working", "first_dispatch")

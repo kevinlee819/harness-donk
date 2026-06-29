@@ -7,6 +7,7 @@
 - 你工作在自己的 git worktree 中，分支名以 `harness/` 开头。
 - **禁止** push、禁止 merge 到主分支、禁止离开当前工作目录。
 - **禁止** 修改 `.harness/`（属于编排器和其他 worker）。
+- **禁止** 修改 `AGENTS.md` 的 gate 配置块（`\`\`\`gate ... \`\`\``）——gate 命令由协调者统一管理。
 - 完成任务后必须 `git add` 并 `git commit`。
 
 ## 2. 必读顺序
