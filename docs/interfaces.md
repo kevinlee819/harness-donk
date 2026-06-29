@@ -14,17 +14,18 @@ Field definitions for data schemas are in [data-schemas.md](data-schemas.md); th
 harness-infi [--no-attach] [--backend <name>] [--model <name>]
 ```
 
-- Behavior: Creates or reuses a tmux session in the current directory (named `harness-<sha8(pwd)>`), with two windows:
-  - **window 0 `coordinator`**: Interactive `claude` loading `coordinator/coordinator.md` as system prompt, with `coordinator/tools/` injected into PATH (`harness-task` available)
+- Behavior: Creates or reuses a tmux session in the current directory (named `harness-<sha8(pwd)>`), with three windows:
+  - **window 0 `coordinator`**: Interactive `claude` loading `coordinator/coordinator.md` as system prompt, with `coordinator/tools/` injected into PATH (`harness-task` available); bottom split-pane shows live status panel
   - **window 1 `orchestrator`**: Long-running `orchestrator.sh` (without `--once`), polling queue every 5s; dispatches immediately when tasks arrive
-- Attaches to window 0 by default; `Ctrl-B 0/1` to switch windows, `Ctrl-B D` to detach while session remains alive
+  - **window 2 `watchdog`**: Long-running `harness-watchdog`, ticks every 10 min (configurable via `HARNESS_WATCHDOG_INTERVAL`); see §8.2
+- Attaches to window 0 by default; `Ctrl-B 0/1/2` to switch windows, `Ctrl-B D` to detach while session remains alive
 - Options:
   - `--no-attach`: Only create the session (for scripts/CI); use `tmux attach -t harness-<hash>` afterward to enter
   - `--backend <name>`: Which writer backend the orchestrator uses (default `claude`; requires `adapters/${name}.sh` to exist)
   - `--model <name>`: Passed through to adapter (e.g. `claude-sonnet-4-6`)
 - Prerequisites: Current directory must be a project that has been `harness init`-ed (`.harness/harness.db` exists); `tmux` and `claude` in PATH
 - Failures: Not initialized → prompts `harness init`; missing backend CLI / unknown backend → prompts `harness doctor` / option typo
-- Implementation note: Two launcher scripts written to `.harness/.coordinator-launcher.sh` and `.harness/.orchestrator-launcher.sh`, avoiding shell quoting nightmares; tmux session opened with `remain-on-exit on` so the orchestrator daemon pane remains after crash for debugging
+- Implementation note: Three launcher scripts written to `.harness/.coordinator-launcher.sh`, `.harness/.orchestrator-launcher.sh`, and `.harness/.watchdog-launcher.sh`, avoiding shell quoting nightmares; tmux session opened with `remain-on-exit on` so daemon panes remain after crash for debugging
 
 ### 1.2 `harness`
 
@@ -37,6 +38,8 @@ harness init [--backend claude|codex]    # bootstrap current directory: create .
 harness status [--task <id>] [--history] # task list / single task details / transition history
 harness events pending                   # list pending events (needs_decision / failed / completed / budget_exceeded)
 harness events ack <eid>...              # mark events as delivered (prevent coordinator from reporting duplicates)
+harness orphans [minutes]                # list orphan tasks (working/dispatched/gating updated > N min ago, default 5)
+harness watchdog-tick                    # run one watchdog cycle manually (see §8.2)
 harness attach [<worker_id>]             # attach to tmux (no argument = coordinator session)
 harness backup                           # sqlite3 .backup → .harness/backups/harness-<ts>.db
                                          # includes retention policy (default 7 days, HARNESS_BACKUP_RETAIN_DAYS adjustable)
@@ -313,6 +316,28 @@ notify(event_type: str, task_id: Optional[str], payload: dict) -> int
 - Writes to `events` table + `.harness/events/<ts>-<event_type>-<task_id>.json`.
 - Fire-and-forget calls `hooks/notification.sh` (desktop notification + notify.log).
 - Coordinator consumes via `harness events pending` / `events ack` (pull-on-re-engagement, see coordinator.md §2.2).
+
+### 8.2 Periodic Supervisor (M15) — `src/harness/watchdog.py` + `bin/harness-watchdog`
+
+```bash
+harness-watchdog [project_dir]   # daemon loop; project_dir defaults to $PWD
+harness watchdog-tick            # run one cycle manually (debugging / verification)
+```
+
+- Configuration: `HARNESS_WATCHDOG_INTERVAL` (seconds, default 600 = 10 min).
+- Launched by `harness-infi` as tmux window 2 — dies with the session.
+- Each tick detects three problem classes; emits `task_failed` events with the
+  reasons below. Dedup state lives at `.harness/.watchdog-state.json` so each
+  problem doesn't fire on every tick.
+
+| `payload.reason`         | When                                              | Re-alert interval | Coordinator handler (see coordinator.md §2.1) |
+|--------------------------|---------------------------------------------------|------------------:|-----------------------------------------------|
+| `orchestrator_down`      | Non-terminal tasks exist, none `updated` ≥ 15 min |          30 min   | Tell user to check window 1 / restart `harness-infi` |
+| `persistent_stuck`       | Queued task blocked by failed dependency          |          60 min   | Check history; retry or escalate              |
+| `events_pending_unread`  | Undelivered event in DB ≥ 10 min                  |          30 min   | Run full `harness events pending` consume loop |
+
+- Tick output: one-line JSON on stdout (`{"ok": true, "ts": "...", ...}`); structured logs on stderr (also appended to `.harness/logs/watchdog.log`).
+- A tick that crashes exits 0 — the daemon must not abort. Errors logged.
 
 ---
 

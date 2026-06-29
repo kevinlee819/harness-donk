@@ -34,25 +34,25 @@ test_creates_session_with_two_windows() {
   assert_contains "coordinator" "$windows"
   assert_contains "orchestrator" "$windows"
 
-  # 给 orchestrator 几秒爬起来
-  sleep 2
-
   # orchestrator window 应有 orchestrator 进程（pane_pid 是 bash launcher，
   # 用 pgrep -P 找子进程的命令行）。注意阶段四后 orchestrator.sh 是 shim — exec 到
   # python -m harness.cli.orchestrator_cli，所以也接受 python 模块名。
+  # 多窗口并发 spawn 时 launcher 的 exec 可能晚到——轮询而不是固定 sleep。
   local pane_pid; pane_pid=$(tmux list-panes -t "$sess:1" -F '#{pane_pid}' 2>/dev/null | head -1)
   local found=0
   _matches_orch() { [[ "$1" == *orchestrator.sh* || "$1" == *orchestrator_cli* ]]; }
   if [[ -n "$pane_pid" ]]; then
-    local cmd; cmd=$(ps -p "$pane_pid" -o args= 2>/dev/null || true)
-    _matches_orch "$cmd" && found=1
-    if [[ $found -eq 0 ]]; then
+    local i
+    for i in 1 2 3 4 5 6 7 8 9 10; do
+      local cmd; cmd=$(ps -p "$pane_pid" -o args= 2>/dev/null || true)
+      _matches_orch "$cmd" && { found=1; break; }
       local children; children=$(pgrep -P "$pane_pid" 2>/dev/null || true)
       for cpid in $children; do
         local c; c=$(ps -p "$cpid" -o args= 2>/dev/null || true)
-        _matches_orch "$c" && found=1
+        _matches_orch "$c" && { found=1; break 2; }
       done
-    fi
+      sleep 0.5
+    done
   fi
 
   _kill_session "$sess"

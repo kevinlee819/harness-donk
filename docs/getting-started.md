@@ -158,12 +158,13 @@ Analogy: `harness-infi` is like starting a ship's engine; `harness` is the toolb
 
 Running `harness-infi` (in a project directory that has been `harness init`-ed):
 
-1. Creates a tmux session named `harness-<project hash>` with two windows:
+1. Creates a tmux session named `harness-<project hash>` with three windows:
    - **window 0 — coordinator**: An interactive Claude Code session with coordinator.md loaded (the place where you chat).
    - **window 1 — orchestrator**: Background orchestrator daemon, polling the queue every 5 seconds, dispatching workers as tasks arrive.
+   - **window 2 — watchdog**: Periodic supervisor; every 10 minutes it checks for problems the orchestrator can't notice itself (orchestrator process down, queued tasks stuck on a failed dependency, unread events piling up) and fires desktop notifications.
 2. Attaches you to window 0.
 
-After that, all your interaction is chatting with the coordinator in window 0. `Ctrl-B 1` to see what the background orchestrator is doing, `Ctrl-B 0` to come back, `Ctrl-B d` to detach (both windows keep running in the background).
+After that, all your interaction is chatting with the coordinator in window 0. `Ctrl-B 1` / `Ctrl-B 2` to peek at the orchestrator / watchdog logs, `Ctrl-B 0` to come back, `Ctrl-B d` to detach (all three windows keep running in the background).
 
 `-infi` is short for "infinite" — it starts a **long-running session** rather than a one-shot command.
 
@@ -470,6 +471,7 @@ What happens:
 - tmux starts a session, cursor lands in window 0 (coordinator).
 - window 0 is a Claude Code session with coordinator.md loaded as system prompt.
 - window 1 is the background orchestrator daemon. `Ctrl-B 1` switches there to see it polling `queue empty`.
+- window 2 is the watchdog daemon. `Ctrl-B 2` switches there to see its 10-minute tick output.
 
 Try talking to the coordinator (in window 0):
 

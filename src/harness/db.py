@@ -482,6 +482,33 @@ def query_blocking_failed() -> list[str]:
     return [r[0] for r in rows]
 
 
+def query_active_freshness() -> Optional[tuple[int, str]]:
+    """Return (count, max_updated_iso) over non-terminal tasks, or None if none.
+
+    Used by watchdog to detect orchestrator-down: if active tasks exist but
+    none has been updated recently, the orchestrator process is likely gone.
+    """
+    with _connect() as c:
+        row = c.execute(
+            "SELECT COUNT(*), COALESCE(MAX(updated), '') FROM tasks "
+            "WHERE status NOT IN ('merged', 'failed')"
+        ).fetchone()
+    if not row or int(row[0]) == 0:
+        return None
+    return (int(row[0]), row[1])
+
+
+def query_oldest_pending_event() -> Optional[tuple[int, str]]:
+    """Return (count, oldest_ts) over undelivered events. None if none pending."""
+    with _connect() as c:
+        row = c.execute(
+            "SELECT COUNT(*), COALESCE(MIN(ts), '') FROM events WHERE delivered=0"
+        ).fetchone()
+    if not row or int(row[0]) == 0:
+        return None
+    return (int(row[0]), row[1])
+
+
 def query_stuck_queued() -> list[str]:
     """Return IDs of queued tasks blocked by at least one failed dependency."""
     with _connect() as c:

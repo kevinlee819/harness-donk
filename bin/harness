@@ -633,6 +633,15 @@ cmd_orphans() {
   done
 }
 
+cmd_watchdog_tick() {
+  # Run one watchdog cycle. Useful for manual testing / debugging the daemon.
+  # The long-running loop lives in bin/harness-watchdog.
+  local cwd; cwd=$(pwd)
+  [[ ! -f "$cwd/.harness/harness.db" ]] && { echo "not initialized" >&2; exit 1; }
+  export HARNESS_DB="$cwd/.harness/harness.db"
+  "$HARNESS_PYTHON" -m harness.cli.watchdog
+}
+
 cmd_watch_panel() {
   # Live status panel in the bottom split-pane. Fast + silent on any error.
   local cwd; cwd=$(pwd)
@@ -647,7 +656,7 @@ cmd_watch_panel() {
     local c; c=$(_db today-cost 2>/dev/null) \
       && cost_str="$(printf '$%.2f' "$c")"
   }
-  local nav="[Ctrl-B 0: chat  Ctrl-B 1: logs]"
+  local nav="[Ctrl-B 0/1/2: chat/logs/watchdog]"
   local gap=$(( W - ${#cost_str} - ${#nav} - 5 ))   # 5 = "🫏  " visual width
   (( gap < 1 )) && gap=1
   printf "🫏  %s%*s%s\n" "$cost_str" "$gap" "" "$nav"
@@ -745,6 +754,8 @@ Commands:
   events pending          列出待处理事件（needs_decision / failed / completed / budget_exceeded）
   events ack <eid>...     标记事件已交付（避免协调者重复报告）
   orphans [minutes]       列出孤儿任务（working/dispatched/gating 超过 N 分钟无更新，默认 5）
+  watchdog-tick           手动跑一次 watchdog 巡检（检测 orchestrator_down /
+                          persistent_stuck / events_pending 并按需 notify）
   backup                  sqlite3 .backup 落到 .harness/backups/
   run-once [--mock]       跑一轮编排器（处理一个任务后退出）
   attach                  attach 到协调者 tmux 会话（无参）
@@ -767,6 +778,7 @@ case "$cmd" in
   status) cmd_status "$@" ;;
   events) cmd_events "$@" ;;
   orphans) cmd_orphans "$@" ;;
+  watchdog-tick) cmd_watchdog_tick "$@" ;;
   backup) cmd_backup "$@" ;;
   run-once) cmd_run_once "$@" ;;
   attach) cmd_attach "$@" ;;

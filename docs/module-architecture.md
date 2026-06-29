@@ -13,7 +13,8 @@
 │
 ├── bin/                                # user/system executable entry points (exposed in PATH)
 │   ├── harness-infi                    # start coordinator session (sole user entry point)
-│   └── harness                         # bash entry: init/status/run-once; DB operations via harness-db CLI
+│   ├── harness                         # bash entry: init/status/run-once; DB operations via harness-db CLI
+│   └── harness-watchdog                # periodic supervisor daemon (launched by harness-infi as tmux window 2)
 │
 ├── orchestrator.sh                     # 7-line shim: exec python -m harness.cli.orchestrator_cli (kept for compatibility with bin/harness run-once / harness-infi entry)
 │
@@ -25,13 +26,15 @@
 │   ├── merge.py                        # MergeRequest + drain_queue (main thread serial git merge)
 │   ├── adapter.py                      # subprocess wrapper: calls adapters/<backend>.sh
 │   ├── notify.py                       # events table + JSON files + hooks/notification.sh (ported from lib/notify.sh)
+│   ├── watchdog.py                     # periodic supervisor — detects orchestrator-down / persistent stuck / unread events
 │   ├── budget.py                       # budget gate (ported from lib/budget.sh)
 │   ├── atomic_write.py                 # JSON / text atomic write (ported from lib/atomic_write.sh)
 │   ├── config.py                       # reads ~/.config/harness/config
 │   └── cli/
 │       ├── harness_task.py             # coordinator tool implementation
 │       ├── db_cli.py                   # bash bridge (harness-db <subcmd>)
-│       └── orchestrator_cli.py         # console script: harness-orchestrator
+│       ├── orchestrator_cli.py         # console script: harness-orchestrator
+│       └── watchdog.py                 # one watchdog tick (called by bin/harness-watchdog loop)
 │
 ├── coordinator/                        # coordinator arming package
 │   ├── coordinator.md                  # coordinator system prompt / interrupt policy (natural language definition)
@@ -106,6 +109,7 @@
 | M12 | Call logging | adapter internal `_log_raw` | Call JSON written to `logs/raw/` (including envelope) | Adapter process |
 | M13 | Orphan recovery | orchestrator `_reap_orphans` + `_timeout_blocked` | Single-process crash residue self-healing + BLOCKED timeout recovery | Orchestrator call |
 | M14 | Backup | `bin/harness backup` + automatic merge hook | sqlite3 `.backup` + retention policy (default 7 days) | bin/harness |
+| M15 | Periodic supervisor | `src/harness/watchdog.py` + `bin/harness-watchdog` | 10-min poll detecting problems orchestrator can't notice (orchestrator-down) + re-notify on persistent stuck / unread events; deduped via `.harness/.watchdog-state.json` | Watchdog process |
 
 ## 3. Dependency Graph (Bottom-Up)
 

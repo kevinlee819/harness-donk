@@ -159,6 +159,17 @@ exec bash '$HARNESS_HOME/orchestrator.sh' --backend '$BACKEND'${MODEL:+ --model 
 EOF
 chmod +x "$orch_launcher"
 
+# watchdog: 每 10 分钟巡检一次，检测 orchestrator 自身挂掉等场景，发桌面通知
+watchdog_launcher="$cwd/.harness/.watchdog-launcher.sh"
+cat > "$watchdog_launcher" <<EOF
+#!/usr/bin/env bash
+set -uo pipefail
+export HARNESS_HOME='$HARNESS_HOME'
+cd '$cwd'
+exec '$HARNESS_HOME/bin/harness-watchdog' '$cwd'
+EOF
+chmod +x "$watchdog_launcher"
+
 # ── 创建会话：window 0 = coordinator + live panel, window 1 = orchestrator ──
 tmux new-session -d -s "$session" -c "$cwd" -n coordinator "$coord_launcher"
 tmux set-option -t "$session" remain-on-exit on >/dev/null 2>&1 || true
@@ -169,6 +180,7 @@ tmux split-window -t "$session:0" -v -p 18 -c "$cwd" "$panel_launcher" 2>/dev/nu
 tmux select-pane  -t "$session:0.0"   # keep focus on top pane (coordinator)
 
 tmux new-window -t "$session" -c "$cwd" -n orchestrator "$orch_launcher"
+tmux new-window -t "$session" -c "$cwd" -n watchdog     "$watchdog_launcher"
 
 # 默认停在 coordinator window
 tmux select-window -t "$session:0"

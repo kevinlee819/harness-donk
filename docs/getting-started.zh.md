@@ -157,12 +157,13 @@ harness 不是一个 AI，是**一个把多个 AI 串起来用、并加上确定
 
 跑 `harness-infi`（在已 `harness init` 过的项目目录里）：
 
-1. 在 tmux 里建一个名叫 `harness-<项目 hash>` 的会话，有两个窗口：
+1. 在 tmux 里建一个名叫 `harness-<项目 hash>` 的会话，有三个窗口：
    - **window 0 — coordinator**：一个交互式 Claude Code 会话，加载好 coordinator.md（你跟它对话的地方）。
    - **window 1 — orchestrator**：后台编排器 daemon，每 5 秒轮询队列、调度 worker。
+   - **window 2 — watchdog**：定时巡检 daemon；每 10 分钟检查编排器自己注意不到的问题（编排器进程挂掉、queued 任务被失败依赖卡死、事件未消费堆积），按需弹桌面通知。
 2. 把你 attach 到 window 0。
 
-之后你的全部交互就是跟 window 0 的协调者对话。`Ctrl-B 1` 看后台编排器在干嘛、`Ctrl-B 0` 回来、`Ctrl-B d` detach（两个窗口都继续在后台跑）。
+之后你的全部交互就是跟 window 0 的协调者对话。`Ctrl-B 1` / `Ctrl-B 2` 看编排器 / watchdog 日志、`Ctrl-B 0` 回来、`Ctrl-B d` detach（三个窗口都继续在后台跑）。
 
 `-infi` 是 "infinite" 的缩写——它启动一个**长跑会话**而非一次性命令。
 
@@ -467,6 +468,7 @@ harness-infi
 - tmux 起一个会话，光标停在 window 0（coordinator）。
 - window 0 是一个 Claude Code 会话，已经加载 coordinator.md 当 system prompt。
 - window 1 是后台 orchestrator daemon。`Ctrl-B 1` 切过去能看到它在 `queue empty` 轮询。
+- window 2 是 watchdog daemon。`Ctrl-B 2` 切过去能看到它每 10 分钟一次的巡检结果。
 
 跟协调者说话试试（在 window 0）：
 

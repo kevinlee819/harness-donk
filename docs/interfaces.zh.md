@@ -14,17 +14,18 @@
 harness-infi [--no-attach] [--backend <name>] [--model <name>]
 ```
 
-- 行为：在当前目录创建/复用一个 tmux 会话（名 `harness-<sha8(pwd)>`），含两个 window：
-  - **window 0 `coordinator`**：交互式 `claude` 加载 `coordinator/coordinator.md` 为 system prompt，PATH 注入 `coordinator/tools/`（`harness-task` 可用）
+- 行为：在当前目录创建/复用一个 tmux 会话（名 `harness-<sha8(pwd)>`），含三个 window：
+  - **window 0 `coordinator`**：交互式 `claude` 加载 `coordinator/coordinator.md` 为 system prompt，PATH 注入 `coordinator/tools/`（`harness-task` 可用）；底部 split-pane 显示实时状态面板
   - **window 1 `orchestrator`**：长跑 `orchestrator.sh`（无 `--once`），每 5s 轮询 queue；任务来了立刻派
-- 默认 attach 到 window 0；`Ctrl-B 0/1` 切窗，`Ctrl-B D` detach 后会话继续存活
+  - **window 2 `watchdog`**：长跑 `harness-watchdog`，每 10 分钟巡检一次（`HARNESS_WATCHDOG_INTERVAL` 可调）；详见 §8.2
+- 默认 attach 到 window 0；`Ctrl-B 0/1/2` 切窗，`Ctrl-B D` detach 后会话继续存活
 - 选项：
   - `--no-attach`：仅创建会话（脚本/CI 用），结束后用 `tmux attach -t harness-<hash>` 进入
   - `--backend <name>`：orchestrator 用哪个写者 backend（默 `claude`，需 `adapters/${name}.sh` 存在）
   - `--model <name>`：透传给 adapter（如 `claude-sonnet-4-6`）
 - 前置：当前目录必须是已 `harness init` 过的项目（`.harness/harness.db` 存在）；`tmux`、`claude` 在 PATH
 - 失败：未初始化 → 提示 `harness init`；缺失 backend CLI / 未知 backend → 提示 `harness doctor` / 选项 typo
-- 实现备注：两个 launcher 脚本写到 `.harness/.coordinator-launcher.sh` 和 `.harness/.orchestrator-launcher.sh`，避开 shell 引号灾难；tmux session 开了 `remain-on-exit on`，orchestrator daemon 挂掉后 pane 仍保留以便排障
+- 实现备注：三个 launcher 脚本写到 `.harness/.coordinator-launcher.sh`、`.harness/.orchestrator-launcher.sh`、`.harness/.watchdog-launcher.sh`，避开 shell 引号灾难；tmux session 开了 `remain-on-exit on`，daemon 挂掉后 pane 仍保留以便排障
 
 ### 1.2 `harness`
 
@@ -37,6 +38,8 @@ harness init [--backend claude|codex]    # 当前目录 bootstrap：建 .harness
 harness status [--task <id>] [--history] # 任务列表 / 单任务详情 / 迁移史
 harness events pending                   # 列出待处理事件（needs_decision / failed / completed / budget_exceeded）
 harness events ack <eid>...              # 标记事件已交付（防止协调者重复报告）
+harness orphans [minutes]                # 列出孤儿任务（working/dispatched/gating 超过 N 分钟未更新，默 5）
+harness watchdog-tick                    # 手动跑一次 watchdog 巡检（详见 §8.2）
 harness attach [<worker_id>]             # attach 到 tmux（无参 = 协调者会话）
 harness backup                           # sqlite3 .backup → .harness/backups/harness-<ts>.db
                                          # 含保留策略（默 7 天，HARNESS_BACKUP_RETAIN_DAYS 可调）
@@ -313,6 +316,27 @@ notify(event_type: str, task_id: Optional[str], payload: dict) -> int
 - 写入 `events` 表 + `.harness/events/<ts>-<event_type>-<task_id>.json`。
 - fire-and-forget 调 `hooks/notification.sh`（桌面通知 + notify.log）。
 - 协调者经 `harness events pending` / `events ack` 消费（pull-on-re-engagement，见 coordinator.md §2.2）。
+
+### 8.2 定时巡检（M15）— `src/harness/watchdog.py` + `bin/harness-watchdog`
+
+```bash
+harness-watchdog [project_dir]   # daemon 循环；project_dir 默认 $PWD
+harness watchdog-tick            # 手动跑一轮（排障 / 验证用）
+```
+
+- 配置：`HARNESS_WATCHDOG_INTERVAL`（秒，默 600 = 10 分钟）。
+- 由 `harness-infi` 作为 tmux window 2 拉起 —— 会话结束即死。
+- 每次 tick 检测三类问题；用以下 reason 发 `task_failed` 事件。
+  去重状态落 `.harness/.watchdog-state.json`，避免每个 tick 都重复触发。
+
+| `payload.reason`         | 触发条件                                                | 重发间隔  | 协调者处理（见 coordinator.md §2.1） |
+|--------------------------|---------------------------------------------------------|----------:|--------------------------------------|
+| `orchestrator_down`      | 存在非终态任务，但全部 `updated` 已 ≥ 15 分钟无更新      |   30 分钟 | 告诉用户切 window 1 / 重启 `harness-infi` |
+| `persistent_stuck`       | queued 任务被失败依赖卡住                                |   60 分钟 | 查 history；retry 或升级               |
+| `events_pending_unread`  | DB 中有未交付事件 ≥ 10 分钟                              |   30 分钟 | 触发完整 `harness events pending` 消费 |
+
+- Tick 输出：stdout 一行 JSON（`{"ok": true, "ts": "...", ...}`）；结构化日志写 stderr（同时追加到 `.harness/logs/watchdog.log`）。
+- 单次 tick crash 仍返回 0 —— daemon 不能中止。错误进 log。
 
 ---
 

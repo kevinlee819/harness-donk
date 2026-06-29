@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# harness-watchdog — periodic supervisor daemon.
+#
+# Wakes every $HARNESS_WATCHDOG_INTERVAL seconds (default 600 = 10 min) and
+# invokes one tick of harness.cli.watchdog. Detects problems the orchestrator
+# can't notice itself (mainly orchestrator-down) and re-notifies on persistent
+# issues. See src/harness/watchdog.py for the detection logic.
+#
+# Usage:
+#   harness-watchdog [project_dir]   # default: $PWD
+#
+# Lifecycle: launched by harness-infi as tmux window 2; dies when the session
+# ends. No state outside `.harness/.watchdog-state.json` (dedup tracking).
+
+set -uo pipefail
+
+_resolve_script_dir() {
+  local src="${BASH_SOURCE[0]}"
+  while [[ -L "$src" ]]; do src="$(readlink "$src")"; done
+  cd "$(dirname "$src")" && pwd
+}
+HARNESS_HOME="${HARNESS_HOME:-$(cd "$(_resolve_script_dir)/.." && pwd)}"
+export HARNESS_HOME
+source "$HARNESS_HOME/lib/python_env.sh"
+
+proj_dir="${1:-$PWD}"
+cd "$proj_dir" || { echo "no such dir: $proj_dir" >&2; exit 1; }
+
+if [[ ! -f "$proj_dir/.harness/harness.db" ]]; then
+  echo "harness-watchdog: not a harness project ($proj_dir)" >&2
+  exit 1
+fi
+
+export HARNESS_DB="$proj_dir/.harness/harness.db"
+interval="${HARNESS_WATCHDOG_INTERVAL:-600}"
+log_dir="$proj_dir/.harness/logs"
+mkdir -p "$log_dir"
+log_file="$log_dir/watchdog.log"
+
+echo "🐕 harness-watchdog starting (project=$proj_dir interval=${interval}s)"
+echo "─────────────────────────────────────────────────────"
+printf "Detection rules:\n"
+printf "  • orchestrator_down    — active tasks idle ≥ 15 min\n"
+printf "  • persistent_stuck     — queued task blocked by failed dep (hourly re-alert)\n"
+printf "  • events_pending       — unconsumed events ≥ 10 min (30-min re-alert)\n"
+echo
+echo "Tail log: $log_file"
+echo
+
+while true; do
+  ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  if out=$("$HARNESS_PYTHON" -m harness.cli.watchdog 2>>"$log_file"); then
+    printf '[%s] %s\n' "$ts" "$out"
+    printf '[%s] %s\n' "$ts" "$out" >> "$log_file"
+  else
+    printf '[%s] tick failed (rc=%d)\n' "$ts" "$?" | tee -a "$log_file"
+  fi
+  sleep "$interval"
+done

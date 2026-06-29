@@ -64,6 +64,13 @@ if [[ -f "$path" ]]; then
   esac
 fi
 
+# 先写一条本地 log——needs_decision 的 osascript 对话框会阻塞到用户作答，
+# 而 notify.log 应在事件触发时就立刻可见（测试与排障都依赖它）
+if [[ -n "$log_dir" ]]; then
+  mkdir -p "$log_dir"
+  printf '%s [%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$etype" "$body" >> "$log_dir/notify.log"
+fi
+
 # ── macOS 桌面通知 ───────────────────────────────────────────
 if [[ "$(uname)" == "Darwin" ]]; then
   donk_icon="${HARNESS_HOME:-}/docs/donk.png"
@@ -159,12 +166,6 @@ PYEOF
       osascript -e "display notification \"$esc_body\" with title \"$esc_title\"" >/dev/null 2>&1 || true
     fi
   fi
-fi
-
-# 永远写一条本地 log（无桌面环境也能追溯）
-if [[ -n "$log_dir" ]]; then
-  mkdir -p "$log_dir"
-  printf '%s [%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$etype" "$body" >> "$log_dir/notify.log"
 fi
 
 exit 0

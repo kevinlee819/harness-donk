@@ -13,7 +13,8 @@
 │
 ├── bin/                                # 用户/系统可执行入口（PATH 暴露）
 │   ├── harness-infi                    # 启动协调者会话（用户唯一入口）
-│   └── harness                         # bash 入口：init/status/run-once；DB 操作经 harness-db CLI
+│   ├── harness                         # bash 入口：init/status/run-once；DB 操作经 harness-db CLI
+│   └── harness-watchdog                # 定时巡检 daemon（由 harness-infi 作为 tmux window 2 拉起）
 │
 ├── orchestrator.sh                     # 7 行 shim：exec python -m harness.cli.orchestrator_cli（保留以兼容 bin/harness run-once / harness-infi 入口）
 │
@@ -25,13 +26,15 @@
 │   ├── merge.py                        # MergeRequest + drain_queue（主线程串行 git merge）
 │   ├── adapter.py                      # subprocess 封装：调 adapters/<backend>.sh
 │   ├── notify.py                       # events 表 + JSON 文件 + hooks/notification.sh（端口自 lib/notify.sh）
+│   ├── watchdog.py                     # 定时巡检——检测 orchestrator-down / 持续 stuck / 久未消费事件
 │   ├── budget.py                       # 预算闸（端口自 lib/budget.sh）
 │   ├── atomic_write.py                 # JSON / text 原子写（端口自 lib/atomic_write.sh）
 │   ├── config.py                       # 读 ~/.config/harness/config
 │   └── cli/
 │       ├── harness_task.py             # 协调者工具实现
 │       ├── db_cli.py                   # bash 调用桥（harness-db <subcmd>）
-│       └── orchestrator_cli.py         # console script: harness-orchestrator
+│       ├── orchestrator_cli.py         # console script: harness-orchestrator
+│       └── watchdog.py                 # 单次 watchdog tick（由 bin/harness-watchdog 循环调用）
 │
 ├── coordinator/                        # 协调者武装包
 │   ├── coordinator.md                  # 协调者 system prompt / 打扰策略（自然语言定义）
@@ -106,6 +109,7 @@
 | M12 | 调用日志 | adapter 内 `_log_raw` | 调用 JSON 落 `logs/raw/`（含 envelope）| adapter 进程 |
 | M13 | 孤儿回收 | orchestrator `_reap_orphans` + `_timeout_blocked` | 单进程下崩溃残留任务自愈 + BLOCKED 超时回收 | 编排器调用 |
 | M14 | 备份 | `bin/harness backup` + 合并节点自动钩 | sqlite3 `.backup` + 保留策略（默 7 天） | bin/harness |
+| M15 | 定时巡检 | `src/harness/watchdog.py` + `bin/harness-watchdog` | 每 10 分钟巡检编排器自己注意不到的问题（orchestrator-down）+ 对持续 stuck / 久未消费事件重发通知；状态文件 `.harness/.watchdog-state.json` 去重 | watchdog 进程 |
 
 ## 3. 依赖关系图（自下而上）
 
