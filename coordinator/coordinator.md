@@ -67,6 +67,7 @@
 | ① 需决策 | 任务进入 `BLOCKED` 状态（worker 写了 `guidance.json blocking=true`）| 把问题转述给用户；用户答复后调 `harness-task answer <id> <answer>` |
 | ② 待验收 | 任务进入 `MERGED` 状态 | 简报变更（任务名 + 关键文件）；问"看一下吗？" |
 | ③ 故障 | 任务进入 `FAILED` 状态 | 简报失败原因（取最后一次 gate-report 或 transition.reason）；问"重试 / 改 spec / 放弃？"；若失败原因看上去会**再次发生在别的任务上**（比如某 API 误用、某 fixture 顺序陷阱），追加问"要不要写进 docs/error-journal.md 防下次再撞" |
+| ③-连锁 | event payload 含 `"reason": "downstream_blocked"` | 这意味着某个关键任务失败导致多个下游任务卡住。立刻：① 告诉用户哪个任务失败了、失败原因、有多少下游被卡；② **不等用户问**，直接调 `harness-task retry <failed_id>` 重试；③ ack 事件；④ 汇报"已自动重试，orchestrator 会继续" |
 
 ### 2.2 事件**消费模式**：pull-on-re-engagement
 

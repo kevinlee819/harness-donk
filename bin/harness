@@ -585,7 +585,7 @@ cmd_watch_panel() {
   export HARNESS_DB="$cwd/.harness/harness.db"
   local W; W=$(tput cols 2>/dev/null || echo 80)
   local CYAN='\033[36m' YLW='\033[33m' GRY='\033[90m' MAG='\033[35m'
-  local GRN='\033[32m'  RED='\033[31m' DIM='\033[2m'   R='\033[0m'
+  local GRN='\033[32m'  RED='\033[31m' DIM='\033[2m'  BLD='\033[1m' R='\033[0m'
 
   # ── header: cost left-aligned, nav hint right-aligned ─────
   local cost_str="$0.00"
@@ -603,6 +603,31 @@ cmd_watch_panel() {
   if [[ ! -f "$HARNESS_DB" ]]; then
     printf "\n  ${DIM}initializing…${R}\n"
     return 0
+  fi
+
+  # ── attention alerts (checked before task list) ───────────
+  # Pending events the coordinator hasn't consumed yet
+  local pending_events
+  pending_events=$(_db event-pending 2>/dev/null | wc -l | tr -d ' ')
+  # Queued tasks permanently blocked by a failed dependency
+  local stuck_ids stuck_count
+  stuck_ids=$(_db stuck-queued 2>/dev/null)
+  stuck_count=$(printf '%s' "$stuck_ids" | grep -c . 2>/dev/null || echo 0)
+
+  if (( pending_events > 0 || stuck_count > 0 )); then
+    printf "\n"
+    if (( stuck_count > 0 )); then
+      local failed_dep
+      failed_dep=$(_db blocking-failed 2>/dev/null | head -1)
+      [[ -z "$failed_dep" ]] && failed_dep="?"
+      printf "  ${RED}${BLD}⚠  STUCK${R}${RED}  %d task(s) blocked — %s failed${R}\n" \
+        "$stuck_count" "$failed_dep"
+      printf "  ${YLW}↑ tell Claude above — it will handle this automatically${R}\n"
+    elif (( pending_events > 0 )); then
+      printf "  ${YLW}${BLD}●  %d event(s) pending${R}${YLW} — say anything to Claude ↑${R}\n" \
+        "$pending_events"
+    fi
+    printf "\n"
   fi
 
   local count=0

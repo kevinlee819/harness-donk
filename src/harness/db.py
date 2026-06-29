@@ -469,6 +469,19 @@ def session_touch(task_id: str, backend: str) -> None:
         )
 
 
+def query_blocking_failed() -> list[str]:
+    """Return IDs of failed tasks that are blocking at least one queued task."""
+    with _connect() as c:
+        rows = c.execute("""
+            SELECT DISTINCT t2.id FROM tasks t1
+            JOIN json_each(t1.depends_on) je ON je.value = t2.id
+            JOIN tasks t2 ON t2.id = je.value
+            WHERE t1.status = 'queued' AND t2.status = 'failed'
+            LIMIT 5
+        """).fetchall()
+    return [r[0] for r in rows]
+
+
 def query_stuck_queued() -> list[str]:
     """Return IDs of queued tasks blocked by at least one failed dependency."""
     with _connect() as c:

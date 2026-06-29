@@ -183,6 +183,20 @@ def cmd_query_blocked_overdue(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_stuck_queued(_args: argparse.Namespace) -> int:
+    for tid in db.query_stuck_queued():
+        print(tid)
+    return 0
+
+
+def cmd_blocking_failed(_args: argparse.Namespace) -> int:
+    """Print the first failed task that is blocking at least one queued task."""
+    tids = db.query_blocking_failed()
+    for tid in tids:
+        print(tid)
+    return 0
+
+
 def cmd_get_spec(args: argparse.Namespace) -> int:
     p = db.get_spec_path(args.task_id)
     if p is not None:
@@ -268,6 +282,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_event_write)
 
     sub.add_parser("event-pending").set_defaults(func=cmd_event_pending)
+    sub.add_parser("stuck-queued").set_defaults(func=cmd_stuck_queued)
+    sub.add_parser("blocking-failed").set_defaults(func=cmd_blocking_failed)
 
     s = sub.add_parser("event-ack")
     s.add_argument("event_id")
