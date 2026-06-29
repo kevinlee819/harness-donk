@@ -340,23 +340,26 @@ harness doctor
 ## 6. 接管你的第一个项目
 
 ```bash
-cd ~/code/my-project          # 必须是已 git init 的目录
+cd ~/code/my-project          # 已有项目或空目录均可；没有 .git 会自动 git init
 harness init                  # 默认 backend=claude，reviewer=codex
 # 或：
 harness init --backend codex  # writer=codex 时自动反转 reviewer=claude
 ```
 
+**空目录 / 全新项目**：`init` 启动交互向导，依次问 (1) 要构建什么（保存到 `specs/initial.md`），(2) 语言/框架（用于自动填写 gate 命令）。  
+**已有文件的项目**：`init` 自动检测项目类型（Python / Node / Go / Rust），提出推荐的 gate 配置，并询问"Does this look right? [Y/n]"。两条路径都支持在写入前手动覆盖 test/lint/build 命令。无 TTY（非交互环境）时静默使用检测到的默认值。
+
 `init` 干了什么（这一步只对每个新项目执行一次）：
 
 1. 在项目根建 `.harness/`（含队列、worker 状态、事件、日志等），整体加进 `.gitignore`。
-2. 生成项目根 `AGENTS.md`（**你接下来要编辑这个文件**），并设好 reviewer。
+2. 生成项目根 `AGENTS.md`，gate 命令已根据自动检测预填好，并设好 reviewer。
 3. 软链 `CLAUDE.md → AGENTS.md`（让 Claude 也读这份）。
 4. 把安全 hooks 装到 `.claude/settings.json`。如果项目已有这个文件，会写一份 `.harness-suggested` 让你手动合并。
 5. 把项目绝对路径登记到 `~/.config/harness/projects.list`（幂等）。
 
-### 6.1 配置校验门（gate）—— 你必须做这一步
+### 6.1 检查校验门配置
 
-`init` 生成的 `AGENTS.md` 顶部有一段 YAML frontmatter：
+`init` 在交互向导阶段已自动填好 gate 命令，检查并按需调整即可。`AGENTS.md` 顶部的 YAML frontmatter 长这样：
 
 ```yaml
 ---
