@@ -299,7 +299,7 @@ Deployed to project `.claude/settings.json`:
 ### 7.3 `hooks/notification.sh` Contract
 
 - Input: `hooks/notification.sh <event_type> <task_id> <event_json_path>` (called fire-and-forget by `harness.notify.notify`).
-- Behavior: macOS desktop notification (osascript) + writes to `.harness/logs/notify.log`.
+- Behavior: macOS desktop notification (osascript) + writes to `.harness/logs/notify.log`. All four event types (`needs_decision`, `task_completed`, `task_failed`, `budget_exceeded`) fire a desktop alert — `task_completed` is needed because the coordinator session can't self-wake; the desktop toast is what brings the user back to chat (then the coordinator pulls events on next message). `needs_decision` shows an interactive dialog that writes the user's answer to `inbox/<tid>.answer`; the others are non-blocking toasts.
 
 ---
 

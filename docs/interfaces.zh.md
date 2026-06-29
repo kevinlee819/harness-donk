@@ -299,7 +299,7 @@ gate:
 ### 7.3 `hooks/notification.sh` 契约
 
 - 输入：`hooks/notification.sh <event_type> <task_id> <event_json_path>`（由 `harness.notify.notify` fire-and-forget 调用）。
-- 行为：macOS 桌面通知（osascript） + 写 `.harness/logs/notify.log`。
+- 行为：macOS 桌面通知（osascript） + 写 `.harness/logs/notify.log`。四种事件类型（`needs_decision` / `task_completed` / `task_failed` / `budget_exceeded`）都会发桌面通知——`task_completed` 也要发，是因为协调者会话不能自己唤醒，桌面 toast 是把用户拉回对话的唯一信号（用户回来发消息时协调者再 pull events）。`needs_decision` 弹交互式对话框，答案写入 `inbox/<tid>.answer`；其他是不阻塞的 toast。
 
 ---
 

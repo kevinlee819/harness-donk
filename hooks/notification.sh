@@ -26,7 +26,7 @@ path="${3:-}"
 [[ -z "$etype" ]] && exit 0
 
 case "$etype" in
-  needs_decision|task_failed|budget_exceeded) ;;
+  needs_decision|task_failed|budget_exceeded|task_completed) ;;
   *) exit 0 ;;
 esac
 
@@ -60,6 +60,10 @@ if [[ -f "$path" ]]; then
     budget_exceeded)
       body=$(jq -r '"今日 $" + (.payload.cost_usd|tostring) + " > 上限 $" + (.payload.limit_usd|tostring)' "$path" 2>/dev/null || echo "$body")
       title="harness: 预算超限"
+      ;;
+    task_completed)
+      body=$(jq -r '"[" + (.task_id // "?") + "] merged · " + (.payload.branch // "")' "$path" 2>/dev/null || echo "$body")
+      title="harness: 任务完成"
       ;;
   esac
 fi
