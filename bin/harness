@@ -558,53 +558,67 @@ cmd_events() {
 }
 
 cmd_watch_panel() {
-  # Live status panel rendered inside the bottom split-pane of the coordinator
-  # tmux window. Called in a tight loop by harness-infi; must be fast + silent
-  # on error. Outputs a compact task list that fits in ~10 terminal rows.
+  # Live status panel in the bottom split-pane. Fast + silent on any error.
   local cwd; cwd=$(pwd)
   export HARNESS_DB="$cwd/.harness/harness.db"
-  local width; width=$(tput cols 2>/dev/null || echo 72)
+  local W; W=$(tput cols 2>/dev/null || echo 80)
+  local CYAN='\033[36m' YLW='\033[33m' GRY='\033[90m' MAG='\033[35m'
+  local GRN='\033[32m'  RED='\033[31m' DIM='\033[2m'   R='\033[0m'
 
-  # ── header ────────────────────────────────────────────────
-  local cost_str="$"
-  if [[ -f "$HARNESS_DB" ]]; then
-    local c; c=$(_db today-cost 2>/dev/null) && cost_str="\$$(printf '%.2f' "$c")"
-  fi
-  printf "🫏  %-*s%s\n" "$((width - 28))" "$cost_str today" \
-    "[Ctrl-B 0: chat | Ctrl-B 1: logs]"
-  printf '%*s\n' "$width" '' | tr ' ' '─'
+  # ── header: cost left-aligned, nav hint right-aligned ─────
+  local cost_str="$0.00"
+  [[ -f "$HARNESS_DB" ]] && {
+    local c; c=$(_db today-cost 2>/dev/null) \
+      && cost_str="$(printf '$%.2f' "$c")"
+  }
+  local nav="[Ctrl-B 0: chat  Ctrl-B 1: logs]"
+  local gap=$(( W - ${#cost_str} - ${#nav} - 5 ))   # 5 = "🫏  " visual width
+  (( gap < 1 )) && gap=1
+  printf "🫏  %s%*s%s\n" "$cost_str" "$gap" "" "$nav"
+  printf "${DIM}%${W}s${R}\n" '' | tr ' ' '─'
 
-  # ── task list ─────────────────────────────────────────────
+  # ── body ──────────────────────────────────────────────────
   if [[ ! -f "$HARNESS_DB" ]]; then
-    printf "  waiting for first task…\n"
+    printf "\n  ${DIM}initializing…${R}\n"
     return 0
   fi
 
   local count=0
   _db query-status 2>/dev/null | while IFS=$'\t' read -r id stat _wid _branch retries _r _p _ts; do
-    local icon color
+    local icon col
     case "$stat" in
-      working)    icon="⚙ working  "; color=$'\033[36m'  ;;
-      gating)     icon="🔍 gating   "; color=$'\033[33m'  ;;
-      queued)     icon="◎ queued   "; color=$'\033[90m'  ;;
-      dispatched) icon="▶ dispatch "; color=$'\033[33m'  ;;
-      blocked)    icon="⏸ blocked  "; color=$'\033[35m'  ;;
-      merged)     icon="✓ merged   "; color=$'\033[32m'  ;;
-      failed)     icon="✗ failed   "; color=$'\033[31m'  ;;
-      *)          icon="  $stat    "; color=''            ;;
+      working)    icon="⚙ working "; col="$CYAN" ;;
+      gating)     icon="🔍 gating  "; col="$YLW"  ;;
+      queued)     icon="○ queued  "; col="$GRY"  ;;
+      dispatched) icon="▶ sent    "; col="$YLW"  ;;
+      blocked)    icon="⏸ blocked "; col="$MAG"  ;;
+      merged)     icon="✓ merged  "; col="$GRN"  ;;
+      failed)     icon="✗ failed  "; col="$RED"  ;;
+      *)          icon="  $stat   "; col=""       ;;
     esac
-    # Best-effort title from spec file first line
     local title="$id"
     local spec="$cwd/specs/${id}.md"
-    [[ -f "$spec" ]] && title=$(head -1 "$spec" 2>/dev/null | sed 's/^# //' | cut -c1-40)
-    printf "  ${color}%s\033[0m  %-40s %s\n" "$icon" "$title" \
-      "$([ "$retries" -gt 0 ] 2>/dev/null && echo "retry:$retries" || true)"
+    [[ -f "$spec" ]] && title=$(head -1 "$spec" 2>/dev/null | sed 's/^# //' | cut -c1-45)
+    local retry_tag=""
+    (( retries > 0 )) 2>/dev/null && retry_tag=" retry:$retries"
+    printf "  ${col}%s${R} ${DIM}%s${R}%s\n" "$icon" "$title" "$retry_tag"
     count=$((count + 1))
-    [[ $count -ge 8 ]] && break
+    [[ $count -ge 7 ]] && break
   done
 
+  # ── empty state: show idea snippet or call-to-action ──────
   if [[ $count -eq 0 ]]; then
-    printf "  no tasks yet — tell the coordinator what to build\n"
+    printf "\n"
+    if [[ -f "$cwd/specs/initial.md" ]]; then
+      local idea
+      idea=$(grep -v '^#\|^---\|^$\|^\*' "$cwd/specs/initial.md" 2>/dev/null \
+             | head -1 | cut -c1-$(( W - 14 )))
+      printf "  ${DIM}💡 idea:${R}  %s\n" "$idea"
+      printf "\n"
+      printf "  ${GRN}↑ say hi to Claude above to get started${R}\n"
+    else
+      printf "  ${DIM}↑ tell Claude what you want to build${R}\n"
+    fi
   fi
 }
 
