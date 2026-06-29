@@ -106,42 +106,28 @@ cmd_init() {
   # ── 3. interactive setup (only when stdin is a TTY) ──────
   if [[ -t 0 ]]; then
     if [[ "$nfiles" -lt 3 && "$proj_type" == unknown ]]; then
-      # PATH A: brand-new empty project — full guided wizard
+      # PATH A: brand-new empty project — just capture the idea, hand off to AI
       echo ""
-      echo "This looks like a new project — let's set it up."
+      echo "This looks like a new project."
       echo ""
       read -r -p "What do you want to build? (brief description): " project_idea
+      # Language/stack decisions belong to the coordinator — skip the bash menu.
+    else
+      # PATH B: existing project — show auto-detected gate config, allow override
       echo ""
-      echo "What language/framework?"
-      echo "  1) Python"
-      echo "  2) Node.js / TypeScript"
-      echo "  3) Go"
-      echo "  4) Rust"
-      echo "  5) Other (I'll configure manually)"
-      read -r -p "Choice [1-5]: " _choice
-      case "$_choice" in
-        1) proj_type=python ;; 2) proj_type=node ;; 3) proj_type=go ;;
-        4) proj_type=rust   ;; *) proj_type=unknown ;;
-      esac
-      while IFS='=' read -r _k _v; do
-        case "$_k" in test) test_cmd="$_v" ;; lint) lint_cmd="$_v" ;; build) build_cmd="$_v" ;; esac
-      done < <(_gate_defaults "$proj_type")
-    fi
-
-    # Show proposed gate config and let user confirm / override
-    echo ""
-    [[ "$proj_type" != unknown ]] && echo "Detected: $proj_type project."
-    echo "Proposed gate configuration:"
-    printf "  test:  %s\n" "${test_cmd:-(none)}"
-    printf "  lint:  %s\n" "${lint_cmd:-(none)}"
-    printf "  build: %s\n" "${build_cmd:-(none)}"
-    echo ""
-    read -r -p "Does this look right? [Y/n]: " _ok
-    if [[ "$_ok" =~ ^[Nn] ]]; then
-      local _v
-      read -r -p "  test  [${test_cmd}]: "  _v; [[ -n "$_v" ]] && test_cmd="$_v"
-      read -r -p "  lint  [${lint_cmd}]: "  _v; [[ -n "$_v" ]] && lint_cmd="$_v"
-      read -r -p "  build [${build_cmd}]: " _v; [[ -n "$_v" ]] && build_cmd="$_v"
+      [[ "$proj_type" != unknown ]] && echo "Detected: $proj_type project."
+      echo "Proposed gate configuration:"
+      printf "  test:  %s\n" "${test_cmd:-(none)}"
+      printf "  lint:  %s\n" "${lint_cmd:-(none)}"
+      printf "  build: %s\n" "${build_cmd:-(none)}"
+      echo ""
+      read -r -p "Does this look right? [Y/n]: " _ok
+      if [[ "$_ok" =~ ^[Nn] ]]; then
+        local _v
+        read -r -p "  test  [${test_cmd}]: "  _v; [[ -n "$_v" ]] && test_cmd="$_v"
+        read -r -p "  lint  [${lint_cmd}]: "  _v; [[ -n "$_v" ]] && lint_cmd="$_v"
+        read -r -p "  build [${build_cmd}]: " _v; [[ -n "$_v" ]] && build_cmd="$_v"
+      fi
     fi
   fi
   # (non-interactive: silently use detected defaults)
