@@ -38,10 +38,13 @@ _gate_defaults() {
       grep -qs "ruff" pyproject.toml 2>/dev/null && lint_cmd="ruff check ." || lint_cmd="flake8"
       ;;
     node)
+      # Always seed with standard npm conventions; override only if package.json
+      # exists but is missing that specific script (then blank it out).
+      test_cmd="npm test"; lint_cmd="npm run lint"; build_cmd="npm run build"
       if [[ -f package.json ]]; then
-        jq -e '.scripts.test'  package.json &>/dev/null && test_cmd="npm test"
-        jq -e '.scripts.lint'  package.json &>/dev/null && lint_cmd="npm run lint"
-        jq -e '.scripts.build' package.json &>/dev/null && build_cmd="npm run build"
+        jq -e '.scripts.test'  package.json &>/dev/null || test_cmd=""
+        jq -e '.scripts.lint'  package.json &>/dev/null || lint_cmd=""
+        jq -e '.scripts.build' package.json &>/dev/null || build_cmd=""
       fi
       ;;
     go)   test_cmd="go test ./..."; build_cmd="go build ./..."; lint_cmd="go vet ./..." ;;
@@ -203,8 +206,14 @@ cmd_init() {
 
   echo ""
   echo "harness initialized in $cwd"
-  if [[ -n "$project_idea" ]]; then
-    echo "next: run 'harness-infi' — your idea is in specs/initial.md"
+
+  # When the wizard captured a project idea, hand off to harness-infi immediately
+  # so the coordinator can continue the conversation.
+  if [[ -n "$project_idea" && -t 0 ]]; then
+    echo "Starting harness-infi — the coordinator will pick up your idea from specs/initial.md."
+    echo "(Ctrl-C now to cancel and start manually later)"
+    sleep 2
+    exec "$HARNESS_HOME/bin/harness-infi"
   else
     echo "next: run 'harness-infi' to start"
     [[ -z "$test_cmd$lint_cmd$build_cmd" ]] && \
