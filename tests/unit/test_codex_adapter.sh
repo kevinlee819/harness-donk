@@ -195,6 +195,71 @@ test_resume_non_uuid_falls_back_to_last() {
   assert_contains -- "--last" "$out" "non-UUID sid → --last fallback"
 }
 
+# ── workspace-write writable_roots（linked worktree git ops fix）─────
+# Background: when a worker runs in a linked git worktree, `git commit` writes
+# into the MAIN repo's .git/ tree (worktrees/<id>/index.lock, objects, refs, ...).
+# That dir lives OUTSIDE the worktree, so default workspace-write blocks all
+# commits — every worker produces zero commits → ghost merges. The adapter
+# must add the main .git/ as an extra writable_root.
+
+_setup_linked_worktree() {
+  # main repo at $d/main with a linked worktree at $d/wt.
+  local d; d=$(make_tmp_dir); track_cleanup "$d"
+  local main="$d/main"
+  mkdir -p "$main"
+  (cd "$main" && git init -q -b main && \
+    git config user.email t@t && git config user.name t && \
+    git config commit.gpgsign false && \
+    echo "seed" > README.md && git add . && git commit -qm i) >/dev/null
+  (cd "$main" && git worktree add -b feature "$d/wt" >/dev/null 2>&1)
+  echo "$d/wt"
+}
+
+test_workspace_write_adds_main_git_dir_to_writable_roots() {
+  # Regression: codex sandbox=workspace-write blocked git commits in linked
+  # worktrees because the main repo's .git/ was read-only. Fix adds it via
+  # `-c sandbox_workspace_write.writable_roots=[...]`.
+  local wt; wt=$(_setup_linked_worktree)
+  local prompt="$wt/.prompt.txt"; echo "x" > "$prompt"
+  local main_git; main_git=$(git -C "$wt" rev-parse --git-common-dir)
+  main_git=$(cd "$wt" && cd "$main_git" && pwd)
+  local out
+  out=$(env HARNESS_ADAPTER_DRYRUN=1 ADAPTER_TASK_FILE="$prompt" ADAPTER_WORKTREE="$wt" \
+        HARNESS_HOME="$HARNESS_HOME" \
+        bash "$HARNESS_HOME/adapters/codex.sh")
+  assert_contains "sandbox_workspace_write.writable_roots" "$out" \
+    "writable_roots flag added for linked worktree"
+  assert_contains "$main_git" "$out" "main .git path included"
+}
+
+test_read_only_mode_omits_writable_roots() {
+  # No writes allowed in read-only mode → writable_roots is meaningless and
+  # shouldn't be emitted. (Review path also uses read-only.)
+  local wt; wt=$(_setup_linked_worktree)
+  local prompt="$wt/.prompt.txt"; echo "x" > "$prompt"
+  local out
+  out=$(env HARNESS_ADAPTER_DRYRUN=1 ADAPTER_TASK_FILE="$prompt" ADAPTER_WORKTREE="$wt" \
+        ADAPTER_SANDBOX=read-only HARNESS_HOME="$HARNESS_HOME" \
+        bash "$HARNESS_HOME/adapters/codex.sh")
+  if [[ "$out" == *"sandbox_workspace_write.writable_roots"* ]]; then
+    _assert_fail "writable_roots should not be passed in read-only mode"
+  fi
+}
+
+test_non_worktree_repo_omits_writable_roots() {
+  # When the worktree IS the main repo (no linked worktree), .git is already
+  # inside cwd — workspace-write covers it natively. Don't add it redundantly.
+  local wt; wt=$(_setup_worktree)  # uses git init in $wt — .git is at $wt/.git
+  local prompt="$wt/.prompt.txt"; echo "x" > "$prompt"
+  local out
+  out=$(env HARNESS_ADAPTER_DRYRUN=1 ADAPTER_TASK_FILE="$prompt" ADAPTER_WORKTREE="$wt" \
+        HARNESS_HOME="$HARNESS_HOME" \
+        bash "$HARNESS_HOME/adapters/codex.sh")
+  if [[ "$out" == *"sandbox_workspace_write.writable_roots"* ]]; then
+    _assert_fail "writable_roots should NOT be added when .git is already inside cwd"
+  fi
+}
+
 test_capability_bitmap_session_id_programmatic_is_one() {
   # codex 0.142+ 暴露 thread_id via thread.started 事件，bitmap 应同步
   local src; src=$(cat "$HARNESS_HOME/adapters/codex.sh")

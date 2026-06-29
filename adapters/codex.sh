@@ -188,6 +188,35 @@ _args=(exec -C "$ADAPTER_WORKTREE" --json -s "$ADAPTER_SANDBOX"
        -o "$LAST_MSG" --skip-git-repo-check)
 [[ -n "$ADAPTER_MODEL" ]] && _args+=(-m "$ADAPTER_MODEL")
 
+# workspace-write only makes the cwd (the worktree) writable, but `git commit`
+# from inside a *linked* worktree writes into the MAIN repo's .git/ tree:
+#   - .git/worktrees/<id>/index.lock   (commit lock)
+#   - .git/worktrees/<id>/HEAD         (symref → branch)
+#   - .git/objects/, .git/refs/, .git/logs/  (object store, refs, reflog)
+# These live OUTSIDE the worktree and are read-only under the default sandbox,
+# so every `git commit` fails with "Operation not permitted". The branch then
+# has zero commits, gate may still pass (if build/lint/test are trivial), and
+# the merge layer's no_commits defense surfaces it as a failure — but the
+# *root cause* is the sandbox blocking commits. Fix: discover the main .git
+# common dir via `rev-parse --git-common-dir` and add it as a writable_root.
+if [[ "$ADAPTER_SANDBOX" == "workspace-write" ]]; then
+  _git_common=$(git -C "$ADAPTER_WORKTREE" rev-parse --git-common-dir 2>/dev/null)
+  if [[ -n "$_git_common" ]]; then
+    # Both sides must be canonicalized identically — on macOS /tmp is a symlink
+    # to /private/tmp, so `cd && pwd` realpath'd output won't string-match the
+    # raw ADAPTER_WORKTREE prefix.
+    _git_common_abs=$(cd "$ADAPTER_WORKTREE" && cd "$_git_common" 2>/dev/null && pwd)
+    _wt_abs=$(cd "$ADAPTER_WORKTREE" 2>/dev/null && pwd)
+    if [[ -n "$_git_common_abs" && -n "$_wt_abs" ]] \
+       && [[ "$_git_common_abs" != "$_wt_abs"/* ]] \
+       && [[ "$_git_common_abs" != "$_wt_abs" ]]; then
+      # Only add when .git is *outside* the worktree (the linked-worktree case).
+      # In normal (non-worktree) repos .git is already inside cwd → workspace-write covers it.
+      _args+=(-c "sandbox_workspace_write.writable_roots=[\"$_git_common_abs\"]")
+    fi
+  fi
+fi
+
 # Review 模式（read-only + 非 resume）：
 #   --ephemeral              不持久化 session（review 不需要后续 resume）
 #   --output-schema <file>   翻译到 Responses API 的 `text.format=json_schema,strict=true`
