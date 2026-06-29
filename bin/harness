@@ -557,6 +557,57 @@ cmd_events() {
   esac
 }
 
+cmd_watch_panel() {
+  # Live status panel rendered inside the bottom split-pane of the coordinator
+  # tmux window. Called in a tight loop by harness-infi; must be fast + silent
+  # on error. Outputs a compact task list that fits in ~10 terminal rows.
+  local cwd; cwd=$(pwd)
+  export HARNESS_DB="$cwd/.harness/harness.db"
+  local width; width=$(tput cols 2>/dev/null || echo 72)
+
+  # ── header ────────────────────────────────────────────────
+  local cost_str="$"
+  if [[ -f "$HARNESS_DB" ]]; then
+    local c; c=$(_db today-cost 2>/dev/null) && cost_str="\$$(printf '%.2f' "$c")"
+  fi
+  printf "🫏  %-*s%s\n" "$((width - 28))" "$cost_str today" \
+    "[Ctrl-B 0: chat | Ctrl-B 1: logs]"
+  printf '%*s\n' "$width" '' | tr ' ' '─'
+
+  # ── task list ─────────────────────────────────────────────
+  if [[ ! -f "$HARNESS_DB" ]]; then
+    printf "  waiting for first task…\n"
+    return 0
+  fi
+
+  local count=0
+  _db query-status 2>/dev/null | while IFS=$'\t' read -r id stat _wid _branch retries _r _p _ts; do
+    local icon color
+    case "$stat" in
+      working)    icon="⚙ working  "; color=$'\033[36m'  ;;
+      gating)     icon="🔍 gating   "; color=$'\033[33m'  ;;
+      queued)     icon="◎ queued   "; color=$'\033[90m'  ;;
+      dispatched) icon="▶ dispatch "; color=$'\033[33m'  ;;
+      blocked)    icon="⏸ blocked  "; color=$'\033[35m'  ;;
+      merged)     icon="✓ merged   "; color=$'\033[32m'  ;;
+      failed)     icon="✗ failed   "; color=$'\033[31m'  ;;
+      *)          icon="  $stat    "; color=''            ;;
+    esac
+    # Best-effort title from spec file first line
+    local title="$id"
+    local spec="$cwd/specs/${id}.md"
+    [[ -f "$spec" ]] && title=$(head -1 "$spec" 2>/dev/null | sed 's/^# //' | cut -c1-40)
+    printf "  ${color}%s\033[0m  %-40s %s\n" "$icon" "$title" \
+      "$([ "$retries" -gt 0 ] 2>/dev/null && echo "retry:$retries" || true)"
+    count=$((count + 1))
+    [[ $count -ge 8 ]] && break
+  done
+
+  if [[ $count -eq 0 ]]; then
+    printf "  no tasks yet — tell the coordinator what to build\n"
+  fi
+}
+
 cmd_statusline() {
   # Claude Code 在协调者 .claude/settings.json 里把 statusLine.command 指到这里。
   # 每个 refreshInterval 调一次：stdin 收 JSON blob → stdout 一行 ANSI。
@@ -603,6 +654,7 @@ case "$cmd" in
   run-once) cmd_run_once "$@" ;;
   attach) cmd_attach "$@" ;;
   upgrade) cmd_upgrade "$@" ;;
+  watch-panel) cmd_watch_panel "$@" ;;
   statusline) cmd_statusline "$@" ;;
   help|-h|--help|"") cmd_help ;;
   *) echo "unknown command: $cmd" >&2; cmd_help; exit 1 ;;

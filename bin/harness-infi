@@ -88,6 +88,24 @@ exec claude --append-system-prompt "\$(cat '$coord_md')"
 EOF
 chmod +x "$coord_launcher"
 
+# watch-panel: loops every 5s, shows live task progress in the bottom split-pane
+panel_launcher="$cwd/.harness/.panel-launcher.sh"
+cat > "$panel_launcher" <<EOF
+#!/usr/bin/env bash
+set -uo pipefail
+export HARNESS_HOME='$HARNESS_HOME'
+export HARNESS_DB='$cwd/.harness/harness.db'
+export PATH='$HARNESS_HOME/coordinator/tools:$HARNESS_HOME/bin':"\$PATH"
+cd '$cwd'
+while true; do
+  clear
+  '$HARNESS_HOME/bin/harness' watch-panel 2>/dev/null \
+    || printf "🫏  initializing…\n"
+  sleep 5
+done
+EOF
+chmod +x "$panel_launcher"
+
 # orchestrator: 长跑 orchestrator.sh（无 --once）
 # 死循环 + sleep 5s 在 queue 空时；任务来了立刻派
 orch_launcher="$cwd/.harness/.orchestrator-launcher.sh"
@@ -108,10 +126,16 @@ exec bash '$HARNESS_HOME/orchestrator.sh' --backend '$BACKEND'${MODEL:+ --model 
 EOF
 chmod +x "$orch_launcher"
 
-# ── 创建会话：window 0 = coordinator, window 1 = orchestrator ──
+# ── 创建会话：window 0 = coordinator + live panel, window 1 = orchestrator ──
 tmux new-session -d -s "$session" -c "$cwd" -n coordinator "$coord_launcher"
 tmux set-option -t "$session" remain-on-exit on >/dev/null 2>&1 || true
-tmux new-window  -t "$session" -c "$cwd" -n orchestrator "$orch_launcher"
+
+# Split coordinator window: top 82% = claude, bottom 18% = live status panel.
+# Failure is non-fatal — some minimal terminals can't split.
+tmux split-window -t "$session:0" -v -p 18 -c "$cwd" "$panel_launcher" 2>/dev/null || true
+tmux select-pane  -t "$session:0.0"   # keep focus on top pane (coordinator)
+
+tmux new-window -t "$session" -c "$cwd" -n orchestrator "$orch_launcher"
 
 # 默认停在 coordinator window
 tmux select-window -t "$session:0"
