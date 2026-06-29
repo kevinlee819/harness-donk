@@ -647,8 +647,15 @@ cmd_watch_panel() {
   local cwd; cwd=$(pwd)
   export HARNESS_DB="$cwd/.harness/harness.db"
   local W; W=$(tput cols 2>/dev/null || echo 80)
+  local H; H=$(tput lines 2>/dev/null || echo 10)
   local CYAN='\033[36m' YLW='\033[33m' GRY='\033[90m' MAG='\033[35m'
   local GRN='\033[32m'  RED='\033[31m' DIM='\033[2m'  BLD='\033[1m' R='\033[0m'
+
+  # Cap visible task rows to what fits the pane. Reserve lines for header (2)
+  # + potential alert (2) + truncation indicator (1). Use static range guard.
+  local row_cap=$(( H - 5 ))
+  (( row_cap < 1 ))  && row_cap=1
+  (( row_cap > 12 )) && row_cap=12
 
   # ── header: cost left-aligned, nav hint right-aligned ─────
   local cost_str="$0.00"
@@ -693,6 +700,7 @@ cmd_watch_panel() {
     printf "\n"
   fi
 
+  local total_tasks; total_tasks=$(_db query-status 2>/dev/null | wc -l | tr -d ' ')
   local count=0
   _db query-status 2>/dev/null | while IFS=$'\t' read -r id stat _wid _branch retries _r _p _ts; do
     local icon col
@@ -706,15 +714,35 @@ cmd_watch_panel() {
       failed)     icon="✗ failed  "; col="$RED"  ;;
       *)          icon="  $stat   "; col=""       ;;
     esac
+    # Title: skip YAML frontmatter (--- ... ---) and pick the first '# ' heading.
+    # Falls back to the task ID when no heading is found. Previous head-1 logic
+    # surfaced '---' as the title for any spec with frontmatter (the default
+    # template includes `max_turns:`, so this bit virtually every new spec).
     local title="$id"
     local spec="$cwd/specs/${id}.md"
-    [[ -f "$spec" ]] && title=$(head -1 "$spec" 2>/dev/null | sed 's/^# //' | cut -c1-45)
+    if [[ -f "$spec" ]]; then
+      local _t
+      _t=$(awk '
+        NR==1 && /^---$/ { fm=1; next }
+        fm==1 && /^---$/ { fm=0; next }
+        fm==1 { next }
+        /^# / { sub(/^# +/, ""); print; exit }
+      ' "$spec" 2>/dev/null | cut -c1-45)
+      [[ -n "$_t" ]] && title="$_t"
+    fi
     local retry_tag=""
     (( retries > 0 )) 2>/dev/null && retry_tag=" retry:$retries"
     printf "  ${col}%s${R} ${DIM}%s${R}%s\n" "$icon" "$title" "$retry_tag"
     count=$((count + 1))
-    [[ $count -ge 7 ]] && break
+    [[ $count -ge $row_cap ]] && break
   done
+
+  # If we clipped some, tell the user explicitly — otherwise it's confusing
+  # to see e.g. Q:2 in the header but only one queued row.
+  if (( total_tasks > row_cap )); then
+    printf "  ${DIM}… +%d more (run 'harness status' for full list)${R}\n" \
+      "$(( total_tasks - row_cap ))"
+  fi
 
   # ── empty state: show idea snippet or call-to-action ──────
   if [[ $count -eq 0 ]]; then
