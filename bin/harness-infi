@@ -29,6 +29,13 @@ NO_ATTACH=0
 BACKEND="claude"
 MODEL=""
 
+# Per-project config (written by 'harness init') overrides hardcoded default.
+# CLI --backend still takes highest priority and is applied below.
+if [[ -f "$cwd/.harness/config" ]]; then
+  _proj_backend=$(grep '^backend=' "$cwd/.harness/config" 2>/dev/null | head -1 | cut -d= -f2-)
+  [[ -n "$_proj_backend" ]] && BACKEND="$_proj_backend"
+fi
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-attach) NO_ATTACH=1; shift ;;

@@ -7,7 +7,7 @@
 #   ADAPTER_WORKTREE      必填，工作目录
 #   ADAPTER_SESSION_ID    可选；非空触发 resume —— UUID 形态直接传 codex exec resume <uuid>，
 #                         否则降级 --last（按 cwd 取最近会话）。
-#   ADAPTER_MAX_TURNS     默认 12（codex 无 turn cap，这里仅记录，靠 timeout 兜底）
+#   ADAPTER_MAX_TURNS     默认 20（codex 无 turn cap，这里仅记录，靠 timeout 兜底）
 #   ADAPTER_TIMEOUT       默认 900
 #   ADAPTER_LOG_DIR       原始 JSONL 落盘
 #   ADAPTER_TASK_ID / ADAPTER_WORKER_ID / ADAPTER_WORKER_DIR
@@ -40,7 +40,7 @@ ADAPTER_PARALLEL_PER_WORKTREE=0                # 必须串行（避开 git index
 : "${ADAPTER_TASK_FILE:?ADAPTER_TASK_FILE required}"
 : "${ADAPTER_WORKTREE:?ADAPTER_WORKTREE required}"
 ADAPTER_SESSION_ID="${ADAPTER_SESSION_ID:-}"
-ADAPTER_MAX_TURNS="${ADAPTER_MAX_TURNS:-12}"
+ADAPTER_MAX_TURNS="${ADAPTER_MAX_TURNS:-20}"
 ADAPTER_TIMEOUT="${ADAPTER_TIMEOUT:-900}"
 ADAPTER_LOG_DIR="${ADAPTER_LOG_DIR:-}"
 ADAPTER_TASK_ID="${ADAPTER_TASK_ID:-}"

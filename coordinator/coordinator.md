@@ -165,6 +165,12 @@ harness status --task T-XXX --history   # 含迁移史
 **你写 spec 时遵守这个格式。** spec 是 worker 唯一的需求来源——含糊 = worker 做错。
 
 ```markdown
+---
+max_turns: 20
+# 默认 20 轮够用。从零初始化大型项目（Electron/React app 等）建议设 30-40。
+# 拆分任务总比加轮次有效——超过 40 说明任务太大，应先拆。
+---
+
 # T-XXX: <一句话标题>
 
 ## 背景

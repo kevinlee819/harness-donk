@@ -171,6 +171,8 @@ cmd_init() {
            "$cwd/.harness/logs/raw" "$cwd/specs"
   export HARNESS_DB="$cwd/.harness/harness.db"
   _db init || { echo "db init failed" >&2; exit 1; }
+  # persist backend choice so harness-infi picks it up without --backend flag
+  printf 'backend=%s\nreviewer=%s\n' "$writer" "$reviewer" > "$cwd/.harness/config"
 
   # ── 5. generate AGENTS.md with gate config filled in ─────
   local lang="${HARNESS_LANG:-en}"
