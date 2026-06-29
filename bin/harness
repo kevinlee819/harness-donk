@@ -190,6 +190,28 @@ cmd_init() {
     echo "saved your idea to specs/initial.md"
   fi
 
+  # ── 7. commit scaffold so worktrees inherit them ─────────
+  # Workers branch from main. If scaffold files (AGENTS.md, .gitignore, etc.)
+  # are untracked in main but committed on a worker branch, git merge fails with
+  # "untracked files would be overwritten". Committing them now prevents this.
+  (
+    cd "$cwd"
+    _scaffold=()
+    [[ -f AGENTS.md ]]             && _scaffold+=(AGENTS.md)
+    [[ -L CLAUDE.md || -f CLAUDE.md ]] && _scaffold+=(CLAUDE.md)
+    [[ -f .gitignore ]]            && _scaffold+=(.gitignore)
+    [[ -f docs/decisions.md ]]     && _scaffold+=(docs/decisions.md)
+    [[ -f docs/error-journal.md ]] && _scaffold+=(docs/error-journal.md)
+    [[ -f specs/initial.md ]]      && _scaffold+=(specs/initial.md)
+    if [[ ${#_scaffold[@]} -gt 0 ]]; then
+      git add "${_scaffold[@]}" 2>/dev/null || true
+      if ! git diff --cached --quiet 2>/dev/null; then
+        git -c commit.gpgsign=false commit -q -m "harness: scaffold" 2>/dev/null \
+          && echo "committed scaffold files to git"
+      fi
+    fi
+  )
+
   echo ""
   echo "harness initialized in $cwd"
 

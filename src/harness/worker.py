@@ -304,7 +304,7 @@ class WorkerThread(threading.Thread):
             log.info("[%s] worktree exists, reusing: %s", j.worker_id, worktree)
         else:
             r = subprocess.run(
-                ["git", "-C", str(j.project_dir), "worktree", "add", "-b", branch, str(worktree)],
+                ["git", "-C", str(j.project_dir), "worktree", "add", "-B", branch, str(worktree)],
                 capture_output=True, text=True,
             )
             if r.returncode != 0:

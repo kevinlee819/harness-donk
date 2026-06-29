@@ -469,6 +469,38 @@ def session_touch(task_id: str, backend: str) -> None:
         )
 
 
+def query_stuck_queued() -> list[str]:
+    """Return IDs of queued tasks blocked by at least one failed dependency."""
+    with _connect() as c:
+        rows = c.execute("""
+            SELECT DISTINCT t1.id FROM tasks t1
+            WHERE t1.status = 'queued'
+              AND t1.depends_on IS NOT NULL AND t1.depends_on != ''
+              AND EXISTS (
+                SELECT 1 FROM json_each(t1.depends_on) je
+                JOIN tasks t2 ON t2.id = je.value
+                WHERE t2.status = 'failed'
+              )
+        """).fetchall()
+    return [r[0] for r in rows]
+
+
+def retry_task(task_id: str) -> None:
+    """Reset a failed task to queued for re-dispatch."""
+    now = _now()
+    with _connect() as c:
+        c.execute(
+            "UPDATE tasks SET status='queued', worker_id=NULL, branch=NULL, updated=? "
+            "WHERE id=? AND status='failed'",
+            (now, task_id),
+        )
+        c.execute(
+            "INSERT INTO transitions(task_id, from_state, to_state, reason, ts) "
+            "VALUES (?,?,?,?,?)",
+            (task_id, "failed", "queued", "manual_retry", now),
+        )
+
+
 def gen_task_id() -> str:
     """T-<unix_ts>-<6 hex>."""
     ts = int(time.time())

@@ -118,6 +118,13 @@ def cmd_cancel(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_retry(args: argparse.Namespace) -> int:
+    db.retry_task(args.task_id)
+    json.dump({"ok": True, "task_id": args.task_id, "queued": True}, sys.stdout)
+    sys.stdout.write("\n")
+    return 0
+
+
 def cmd_answer(args: argparse.Namespace) -> int:
     payload = {
         "schema_version": 1,
@@ -161,6 +168,10 @@ def build_parser() -> argparse.ArgumentParser:
     ans.add_argument("task_id")
     ans.add_argument("answer", nargs="+")
     ans.set_defaults(func=cmd_answer)
+
+    r = sub.add_parser("retry")
+    r.add_argument("task_id")
+    r.set_defaults(func=cmd_retry)
 
     return p
 

@@ -107,6 +107,7 @@ harness-task query [--status queued|working|gating|blocked|merged|failed]
 harness-task history <task_id>          # 看任务状态迁移历史
 harness-task cancel  <task_id>          # 取消未完成任务（→ failed, reason=user_cancelled）
 harness-task answer  <task_id> <text>   # 答复 BLOCKED 状态的任务，自动解除阻塞
+harness-task retry   <task_id>          # 重置 failed 任务 → queued，让 orchestrator 重新派发
 ```
 
 **用法纪律**：

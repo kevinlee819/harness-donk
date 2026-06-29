@@ -285,6 +285,7 @@ def run(cfg: RuntimeConfig) -> int:
     _pool = Pool(cfg.max_workers)
     signal.signal(signal.SIGINT, _handle_sigint)
     signal.signal(signal.SIGTERM, _handle_sigint)
+    _stuck_notified: set[str] = set()  # avoid spamming the same stuck task
 
     adapter_sh = cfg.harness_home / "adapters" / f"{cfg.backend}.sh"
     if not adapter_sh.is_file():
@@ -343,6 +344,23 @@ def run(cfg: RuntimeConfig) -> int:
 
         if not _pool.has_work():
             log.info("queue empty (or budget locked)")
+            # Detect queued tasks permanently blocked by a failed dependency.
+            try:
+                stuck = db.query_stuck_queued()
+                new_stuck = [tid for tid in stuck if tid not in _stuck_notified]
+                if new_stuck:
+                    _stuck_notified.update(new_stuck)
+                    log.warning(
+                        "STUCK: %d queued task(s) blocked by failed dep: %s — "
+                        "use 'harness-task retry <id>' to re-queue the failed task",
+                        len(new_stuck), new_stuck,
+                    )
+                    notify("task_failed", new_stuck[0], {
+                        "reason": "downstream_blocked",
+                        "blocked_tasks": new_stuck,
+                    })
+            except Exception:
+                log.exception("stuck-check failed")
             time.sleep(5)
         else:
             time.sleep(0.5)
