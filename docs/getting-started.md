@@ -532,7 +532,28 @@ harness events pending
 harness events ack <eid>...
 ```
 
-### 8.4 三档之间的衔接
+### 8.4 状态栏（自动，无需操作）
+
+`harness init` 会往项目的 `.claude/settings.json` 写入 `statusLine` 配置，让 Claude Code 协调者会话**底部状态栏**每 5 秒刷一次：
+
+```
+🫏 W:2 Q:1 B:0 F:0 M:7 · $1.24/$10 · w2/4 · Opus 4.7
+   │   │   │   │   │      │           │       │
+   │   │   │   │   │      │           │       └─ 当前模型
+   │   │   │   │   │      │           └─ worker 池 busy/total
+   │   │   │   │   │      └─ 今日成本 / 日预算（>50% 黄、>90% 红）
+   │   │   │   │   └─ 今日 merged 数
+   │   │   │   └─ failed
+   │   │   └─ blocked（红色，有就提醒）
+   │   └─ queued
+   └─ working
+```
+
+数据源是 `.harness/harness.db`（不是 Claude Code 自己的 token 统计）。所以这条状态栏告诉你的是**任务调度层的状态**，不是当前对话的 token 用量。
+
+> 想看 Claude Code 原生的 token / 缓存 / weekly Sonnet/Opus 拆分？可以叠装 [ccstatusline](https://github.com/sirmalloc/ccstatusline)，与 harness 状态栏正交（但同一时刻只能挂一个 `statusLine.command`——选一个）。
+
+### 8.5 三档之间的衔接
 
 - 对话 → 委派：协调者直接调 `harness-task add`，不用你重打提示词。
 - 委派 → 观测：你随时可问，也可彻底不问让它自己跑完通知你。
@@ -563,6 +584,7 @@ harness attach                   # attach 到协调者 tmux 会话
 harness attach <wid> [--path]    # worker 现场快照（或仅 worktree 路径）
 harness backup                   # sqlite3 .backup → .harness/backups/
 harness run-once [--mock]        # 跑一轮编排器后退出（手动调试用）
+harness statusline               # Claude Code 状态栏渲染器（不直接调，见 §8.4）
 harness help
 ```
 

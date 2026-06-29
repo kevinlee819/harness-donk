@@ -439,6 +439,13 @@ cmd_events() {
   esac
 }
 
+cmd_statusline() {
+  # Claude Code 在协调者 .claude/settings.json 里把 statusLine.command 指到这里。
+  # 每个 refreshInterval 调一次：stdin 收 JSON blob → stdout 一行 ANSI。
+  # 逻辑全在 Python 模块（一次进程启动读完所有 DB / 文件，避免 bash 多次起 python）。
+  exec "$HARNESS_PYTHON" -m harness.cli.statusline "$@"
+}
+
 cmd_help() {
   # 'EOF' 单引号关闭变量/命令替换 —— help 文本里有 $(harness ...) 示例，
   # 不引号会被 bash 当命令执行（一直 stderr 报 "harness: command not found"）
@@ -459,6 +466,8 @@ Commands:
   attach <wid> [--path]   worker 现场快照（worker 是 Python 线程，非独立 pane）；
                           --path 仅打印 worktree 路径，便于 cd "$(harness attach w1 --path)"
   upgrade                 拉最新源码 + uv sync + 重做符号链接（git pull --ff-only）
+  statusline              Claude Code statusline 渲染器（接 stdin JSON，输出一行 ANSI）；
+                          一般不直接调，由协调者 .claude/settings.json 自动调用
   help                    本帮助
 
 Coordinator entry: harness-infi   (启动协调者对话面)
@@ -476,6 +485,7 @@ case "$cmd" in
   run-once) cmd_run_once "$@" ;;
   attach) cmd_attach "$@" ;;
   upgrade) cmd_upgrade "$@" ;;
+  statusline) cmd_statusline "$@" ;;
   help|-h|--help|"") cmd_help ;;
   *) echo "unknown command: $cmd" >&2; cmd_help; exit 1 ;;
 esac

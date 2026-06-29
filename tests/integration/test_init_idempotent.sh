@@ -93,6 +93,13 @@ test_init_installs_settings_json() {
   assert_contains "pre_tool_use.sh" "$hooks"
   # HARNESS_HOME 占位符应已替换为绝对路径
   assert_not_match '\{\{HARNESS_HOME\}\}' "$hooks" "placeholder substituted"
+
+  # statusLine 配置应注入并指到 harness 二进制
+  local sl_cmd; sl_cmd=$(jq -r '.statusLine.command' "$d/.claude/settings.json")
+  assert_contains "harness statusline" "$sl_cmd" "statusLine.command points at harness statusline"
+  assert_not_match '\{\{HARNESS_HOME\}\}' "$sl_cmd" "statusLine placeholder substituted"
+  local sl_intv; sl_intv=$(jq -r '.statusLine.refreshInterval' "$d/.claude/settings.json")
+  assert_eq "5" "$sl_intv" "refreshInterval defaults to 5s"
 }
 
 test_init_preserves_existing_settings() {
