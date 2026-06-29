@@ -46,7 +46,7 @@ fi
 ok()    { printf "%s ✓%s %s\n"  "$C_GREEN"  "$C_RST" "$*"; }
 warn()  { printf "%s ⚠%s %s\n"  "$C_YELLOW" "$C_RST" "$*"; }
 fail()  { printf "%s ✗%s %s\n"  "$C_RED"    "$C_RST" "$*" >&2; }
-info()  { printf "%s•%s %s\n"   "$C_BLUE"   "$C_RST" "$*"; }
+info()  { printf "%s•%s %s\n"   "$C_BLUE"   "$C_RST" "$*" >&2; }
 step()  { printf "\n%s==%s %s%s%s\n" "$C_BOLD" "$C_RST" "$C_BOLD" "$*" "$C_RST"; }
 
 confirm() {
