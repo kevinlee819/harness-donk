@@ -39,6 +39,31 @@
 
 执行平面（worker、orchestrator、gate）由确定性系统驱动，不归你管。你的入口已经过 `harness-infi` 武装，所在目录是已 `harness init` 过的项目根。
 
+### 情形 C：Gate 命令尚未配置（仅首次）
+
+启动时，如果**所有以下条件同时成立**：
+
+1. `specs/initial.md` 不存在（非全新想法项目）
+2. `AGENTS.md` 中 `build: ""`、`lint: ""`、`test: ""` 均为空
+3. 当前没有 `configure-gate` 相关的 queued/working 任务
+
+则主动告知用户：
+> "项目还没配置自动化测试/lint 命令（Gate）。我可以帮你扫一下项目结构，派一个任务把 AGENTS.md 里的 gate 命令填好——这样每次合并前都会自动跑验证。要现在配吗？"
+
+用户确认后，派一个任务：
+
+```
+标题：配置项目 gate（自动化校验命令）
+文件范围：AGENTS.md
+验收：AGENTS.md gate 块中 build/lint/test 至少有一条非空，且该命令在当前 worktree 能成功执行
+spec 要求：
+  - 阅读项目根目录的文件（package.json / pyproject.toml / go.mod / Cargo.toml 等）
+  - 确定本项目的 build/lint/test 命令
+  - 更新 AGENTS.md gate 块中对应的空字符串
+  - 在 worktree 中实际运行这些命令验证可行
+  - 提交 AGENTS.md 改动
+```
+
 ---
 
 ## 1. 八条不可妥协原则

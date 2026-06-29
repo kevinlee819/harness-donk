@@ -67,18 +67,14 @@ cmd="${1:-help}"; shift || true
 cmd_init() {
   local cwd; cwd=$(pwd)
   local writer="claude"
+  local reviewer=""
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --backend) writer="$2"; shift 2 ;;
+      --backend)  writer="$2";   shift 2 ;;
+      --reviewer) reviewer="$2"; shift 2 ;;
       *) shift ;;
     esac
   done
-  local reviewer
-  case "$writer" in
-    claude) reviewer="codex" ;;
-    codex)  reviewer="claude" ;;
-    *)      reviewer="codex" ;;
-  esac
 
   # ── 1. ensure git repo ───────────────────────────────────
   if [[ ! -d "$cwd/.git" ]]; then
@@ -105,32 +101,70 @@ cmd_init() {
 
   # ── 3. interactive setup (only when stdin is a TTY) ──────
   if [[ -t 0 ]]; then
+    # ── 选执行 agent 和审查 agent ─────────────────────────
+    echo ""
+    echo "执行 agent（负责写代码的 worker）："
+    echo "  1) claude  （推荐，自带文件编辑工具）"
+    echo "  2) codex   （OpenAI Codex CLI）"
+    read -r -p "  [1]: " _c
+    case "${_c:-1}" in
+      2|codex) writer="codex" ;;
+      *)       writer="claude" ;;
+    esac
+
+    echo ""
+    echo "审查 agent（cross-review，建议与 writer 不同模型）："
+    if [[ "$writer" == "claude" ]]; then
+      echo "  1) codex   （推荐）"
+      echo "  2) claude  （同模型，效果较弱）"
+      echo "  3) 跳过    （关闭 cross_review）"
+      read -r -p "  [1]: " _c
+      case "${_c:-1}" in
+        2|claude) reviewer="claude" ;;
+        3|skip)   reviewer="none" ;;
+        *)        reviewer="codex" ;;
+      esac
+    else
+      echo "  1) claude  （推荐）"
+      echo "  2) codex   （同模型，效果较弱）"
+      echo "  3) 跳过    （关闭 cross_review）"
+      read -r -p "  [1]: " _c
+      case "${_c:-1}" in
+        2|codex) reviewer="codex" ;;
+        3|skip)  reviewer="none" ;;
+        *)       reviewer="claude" ;;
+      esac
+    fi
+
     if [[ "$nfiles" -lt 3 && "$proj_type" == unknown ]]; then
       # PATH A: brand-new empty project — just capture the idea, hand off to AI
       echo ""
-      echo "This looks like a new project."
+      echo "这是一个新项目。"
       echo ""
-      read -r -p "What do you want to build? (brief description): " project_idea
-      # Language/stack decisions belong to the coordinator — skip the bash menu.
+      read -r -p "你想做什么？（一句话描述）: " project_idea
     else
-      # PATH B: existing project — show auto-detected gate config, allow override
+      # PATH B: existing project — auto-detect gate, coordinator verifies on first run
       echo ""
-      [[ "$proj_type" != unknown ]] && echo "Detected: $proj_type project."
-      echo "Proposed gate configuration:"
-      printf "  test:  %s\n" "${test_cmd:-(none)}"
-      printf "  lint:  %s\n" "${lint_cmd:-(none)}"
-      printf "  build: %s\n" "${build_cmd:-(none)}"
-      echo ""
-      read -r -p "Does this look right? [Y/n]: " _ok
-      if [[ "$_ok" =~ ^[Nn] ]]; then
-        local _v
-        read -r -p "  test  [${test_cmd}]: "  _v; [[ -n "$_v" ]] && test_cmd="$_v"
-        read -r -p "  lint  [${lint_cmd}]: "  _v; [[ -n "$_v" ]] && lint_cmd="$_v"
-        read -r -p "  build [${build_cmd}]: " _v; [[ -n "$_v" ]] && build_cmd="$_v"
+      [[ "$proj_type" != unknown ]] && echo "检测到：$proj_type 项目。"
+      if [[ -n "${build_cmd}${lint_cmd}${test_cmd}" ]]; then
+        echo "Gate 命令（自动检测；协调者首次运行时会验证/更新）："
+        printf "  build: %s\n" "${build_cmd:-(none)}"
+        printf "  lint:  %s\n" "${lint_cmd:-(none)}"
+        printf "  test:  %s\n" "${test_cmd:-(none)}"
+      else
+        echo "未检测到标准 gate 命令 — 协调者会在分析项目后自动配置。"
       fi
     fi
   fi
-  # (non-interactive: silently use detected defaults)
+  # non-interactive: silently apply detected defaults
+
+  # apply reviewer default if still unset (non-interactive or --backend only)
+  if [[ -z "$reviewer" ]]; then
+    case "$writer" in
+      claude) reviewer="codex" ;;
+      *)      reviewer="claude" ;;
+    esac
+  fi
 
   # ── 4. scaffold .harness/ ────────────────────────────────
   mkdir -p "$cwd/.harness/workers" "$cwd/.harness/inbox" "$cwd/.harness/events" \
@@ -144,8 +178,11 @@ cmd_init() {
   [[ -d "$tmpl_dir" ]] || tmpl_dir="$HARNESS_HOME/templates"
 
   if [[ ! -f "$cwd/AGENTS.md" ]]; then
+    # reviewer="none" → keep placeholder reviewer value but enabled stays false
+    local _agents_reviewer="$reviewer"
+    [[ "$_agents_reviewer" == "none" ]] && _agents_reviewer="codex"
     sed -e "s/{{PROJECT_NAME}}/$(basename "$cwd")/g" \
-        -e "s/^cross_review_reviewer: codex$/cross_review_reviewer: $reviewer/" \
+        -e "s/^cross_review_reviewer: codex$/cross_review_reviewer: $_agents_reviewer/" \
         -e "s#build: \"\"#build: \"${build_cmd}\"#" \
         -e "s#lint: \"\"#lint: \"${lint_cmd}\"#" \
         -e "s#test: \"\"#test: \"${test_cmd}\"#" \
