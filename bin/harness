@@ -611,7 +611,7 @@ cmd_watch_panel() {
     printf "\n"
     if [[ -f "$cwd/specs/initial.md" ]]; then
       local idea
-      idea=$(grep -v '^#\|^---\|^$\|^\*' "$cwd/specs/initial.md" 2>/dev/null \
+      idea=$(grep -Ev '^#|^---|^$|^\*' "$cwd/specs/initial.md" 2>/dev/null \
              | head -1 | cut -c1-$(( W - 14 )))
       printf "  ${DIM}💡 idea:${R}  %s\n" "$idea"
       printf "\n"
