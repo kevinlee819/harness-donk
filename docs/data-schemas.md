@@ -1,44 +1,44 @@
-# 数据契约（schema）
+# Data Contracts (Schema)
 
-形式化定义本系统所有持久化数据。三端（adapter / 编排器 / 协调者工具）必须同步实现；改动必须递增 `schema_version` 并同步全部代码。
+Formally defines all persisted data in this system. All three ends (adapter / orchestrator / coordinator tools) must implement in sync; changes must increment `schema_version` and synchronize all code.
 
-当前版本：`schema_version = 1`。
+Current version: `schema_version = 1`.
 
 ---
 
-## 1. SQLite：`<project>/.harness/harness.db`
+## 1. SQLite: `<project>/.harness/harness.db`
 
-### 1.1 启动 PRAGMA
+### 1.1 Startup PRAGMAs
 
 ```sql
 PRAGMA journal_mode=WAL;
 PRAGMA busy_timeout=5000;
 PRAGMA foreign_keys=ON;
-PRAGMA user_version=1;          -- schema_version 等价
+PRAGMA user_version=1;          -- schema_version equivalent
 ```
 
 ### 1.2 DDL
 
 ```sql
--- 任务主表
+-- main tasks table
 CREATE TABLE IF NOT EXISTS tasks (
-  id            TEXT PRIMARY KEY,        -- T-XXXX，建议时间序+短哈希
-  spec_path     TEXT NOT NULL,           -- 相对项目根：specs/T-0042.md
+  id            TEXT PRIMARY KEY,        -- T-XXXX, recommended: time-ordered + short hash
+  spec_path     TEXT NOT NULL,           -- relative to project root: specs/T-0042.md
   status        TEXT NOT NULL DEFAULT 'queued'
                 CHECK (status IN ('queued','dispatched','working',
                                   'gating','blocked','merged','failed')),
   worker_id     TEXT,                    -- w1 / w2 ...
   branch        TEXT,                    -- harness/T-0042
-  priority      INTEGER DEFAULT 100,     -- 数越小越先派
-  retries       INTEGER DEFAULT 0,       -- gate 失败回灌次数
-  redispatches  INTEGER DEFAULT 0,       -- 死 worker 重派次数
-  depends_on    TEXT,                    -- JSON array of task_id 或 NULL
+  priority      INTEGER DEFAULT 100,     -- lower number = dispatched first
+  retries       INTEGER DEFAULT 0,       -- gate failure feedback retry count
+  redispatches  INTEGER DEFAULT 0,       -- dead worker redispatch count
+  depends_on    TEXT,                    -- JSON array of task_id or NULL
   created       TEXT NOT NULL,           -- ISO-8601 UTC
   updated       TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_status_priority ON tasks(status, priority, id);
 
--- 状态迁移历史（审计 + 崩溃续跑读回）
+-- state transition history (audit + crash recovery read-back)
 CREATE TABLE IF NOT EXISTS transitions (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id    TEXT NOT NULL REFERENCES tasks(id),
@@ -49,17 +49,17 @@ CREATE TABLE IF NOT EXISTS transitions (
 );
 CREATE INDEX IF NOT EXISTS idx_transitions_task ON transitions(task_id, ts);
 
--- 会话注册（session resume + 死 worker 检测）
+-- session registry (session resume + dead worker detection)
 CREATE TABLE IF NOT EXISTS sessions (
   task_id       TEXT NOT NULL REFERENCES tasks(id),
   backend       TEXT NOT NULL,            -- claude / codex / opencode
-  session_id    TEXT,                     -- Codex 可能为 NULL（用 --last）
+  session_id    TEXT,                     -- Codex may be NULL (uses --last)
   resume_count  INTEGER DEFAULT 0,
-  last_seen     TEXT,                     -- 摄取 status.json 时刷新
+  last_seen     TEXT,                     -- refreshed when status.json is ingested
   PRIMARY KEY (task_id, backend)
 );
 
--- 调用账（成本与可观测）
+-- call ledger (cost and observability)
 CREATE TABLE IF NOT EXISTS calls (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   ts            TEXT NOT NULL,
@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS calls (
   backend       TEXT NOT NULL,
   session_id    TEXT,
   exit_code     INTEGER,
-  cost_usd      REAL,                     -- 不可获取时 NULL
+  cost_usd      REAL,                     -- NULL when not obtainable
   num_turns     INTEGER,
   duration_ms   INTEGER,
   files_changed INTEGER
@@ -76,7 +76,7 @@ CREATE TABLE IF NOT EXISTS calls (
 CREATE INDEX IF NOT EXISTS idx_calls_ts ON calls(ts);
 CREATE INDEX IF NOT EXISTS idx_calls_task ON calls(task_id);
 
--- 待路由事件队列（编排器写、协调者注入器消费）
+-- pending event routing queue (orchestrator writes, coordinator injector consumes)
 CREATE TABLE IF NOT EXISTS events (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   ts         TEXT NOT NULL,
@@ -90,9 +90,9 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_pending ON events(delivered, ts);
 ```
 
-### 1.3 关键查询
+### 1.3 Key Queries
 
-**原子 claim 队首任务**：
+**Atomic claim of head task**:
 
 ```sql
 UPDATE tasks
@@ -111,7 +111,7 @@ WHERE id=(
 RETURNING id, spec_path;
 ```
 
-**死 worker 扫描**：
+**Dead worker scan**:
 
 ```sql
 SELECT t.id, t.worker_id
@@ -121,7 +121,7 @@ WHERE t.status='working'
   AND s.last_seen < datetime('now', '-' || :threshold || ' minutes');
 ```
 
-**今日成本**：
+**Today's cost**:
 
 ```sql
 SELECT COALESCE(SUM(cost_usd), 0) FROM calls
@@ -130,7 +130,7 @@ WHERE ts >= datetime('now', 'start of day');
 
 ---
 
-## 2. JSON 黑板：worker 写入
+## 2. JSON Blackboard: Worker Writes
 
 ### 2.1 `<project>/.harness/workers/<worker_id>/status.json`
 
@@ -143,7 +143,7 @@ WHERE ts >= datetime('now', 'start of day');
   "task_id": "T-0042",
   "status": "working",
   "branch": "harness/T-0042",
-  "progress": "JWT 中间件已完成，正在写测试",
+  "progress": "JWT middleware done, writing tests",
   "turns": 42,
   "files_changed": 3,
   "blockers": [],
@@ -151,78 +151,78 @@ WHERE ts >= datetime('now', 'start of day');
 }
 ```
 
-| 字段 | 类型 | 必填 | 取值 |
-|------|------|------|------|
+| Field | Type | Required | Values |
+|-------|------|----------|--------|
 | `schema_version` | int | ✓ | 1 |
 | `worker_id` | string | ✓ | `w1`/`w2`... |
 | `backend` | string | ✓ | `claude`/`codex`/`opencode` |
-| `session_id` | string | ✓ | UUID；Codex 可填 `__last__` 占位 |
+| `session_id` | string | ✓ | UUID; Codex may use `__last__` as placeholder |
 | `task_id` | string | ✓ | `T-XXXX` |
 | `status` | enum | ✓ | `starting`/`working`/`done`/`error` |
-| `branch` | string | ✓ | 该 worker 所在分支 |
-| `progress` | string | ✓ | 给人看的一句话进度，不做控制决策 |
-| `turns` | int | ✓ | 当前会话累计轮次 |
-| `files_changed` | int | ✓ | 当前 worktree 累计改动文件数 |
-| `blockers` | array | ✓ | 软阻塞清单（不触发 BLOCKED） |
-| `updated` | ISO-8601 UTC | ✓ | 每次写更新 |
+| `branch` | string | ✓ | the branch this worker is on |
+| `progress` | string | ✓ | one-line human-readable progress; not used for control decisions |
+| `turns` | int | ✓ | cumulative turns in current session |
+| `files_changed` | int | ✓ | cumulative files changed in current worktree |
+| `blockers` | array | ✓ | soft blocker list (does not trigger BLOCKED) |
+| `updated` | ISO-8601 UTC | ✓ | updated on every write |
 
-**编排器如何读**：
+**How the orchestrator reads this**:
 
-- `status` 为 `done` → 触发 WORKING→GATING。
-- `status` 为 `error` → 触发回灌或 FAILED（按 retries）。
-- 每次摄取都刷新 `sessions.last_seen`。
+- `status` is `done` → triggers WORKING→GATING.
+- `status` is `error` → triggers feedback or FAILED (based on retries).
+- Every ingest refreshes `sessions.last_seen`.
 
 ### 2.2 `<project>/.harness/workers/<worker_id>/guidance.json`
 
-worker 需人工/协调者决策时写。**存在即视为阻塞**。
+Written by the worker when it needs a human/coordinator decision. **Presence is treated as blocking**.
 
 ```json
 {
   "schema_version": 1,
   "blocking": true,
   "task_id": "T-0042",
-  "question": "JWT 签名用 RS256 还是 HS256?",
-  "context": "RS256 更安全但需密钥管理；当前项目无 KMS。",
+  "question": "Use RS256 or HS256 for JWT signing?",
+  "context": "RS256 is more secure but requires key management; current project has no KMS.",
   "options": ["RS256", "HS256"],
   "created": "2026-06-12T10:20:00Z"
 }
 ```
 
-| 字段 | 类型 | 必填 | 备注 |
-|------|------|------|------|
-| `blocking` | bool | ✓ | 仅 `true` 触发 BLOCKED；预留 `false` 作软提醒 |
-| `task_id` | string | ✓ | 关联任务 |
-| `question` | string | ✓ | 自然语言问题 |
-| `context` | string |   | 决策背景 |
-| `options` | array<string> |   | 可选答案；非空时协调者优先在此中选 |
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `blocking` | bool | ✓ | Only `true` triggers BLOCKED; `false` reserved for soft reminders |
+| `task_id` | string | ✓ | associated task |
+| `question` | string | ✓ | natural language question |
+| `context` | string |   | decision background |
+| `options` | array<string> |   | possible answers; when non-empty, coordinator prefers to choose from these |
 | `created` | ISO-8601 UTC | ✓ |   |
 
-**编排器动作**：`blocking==true` → `db_transition(task, BLOCKED)` → `notify needs_decision` → 等待 `inbox/<id>.answer` 出现。
+**Orchestrator action**: `blocking==true` → `db_transition(task, BLOCKED)` → `notify needs_decision` → wait for `inbox/<id>.answer` to appear.
 
 ### 2.3 `<project>/.harness/inbox/<task_id>.answer`
 
-人或协调者写。**单行 JSON 或纯文本**：
+Written by human or coordinator. **Single-line JSON or plain text**:
 
 ```json
 {
   "schema_version": 1,
   "task_id": "T-0042",
-  "answer": "用 RS256，密钥放 .env.local，新增到 .gitignore",
+  "answer": "Use RS256, key stored in .env.local, added to .gitignore",
   "decided_by": "user",
   "ts": "2026-06-12T10:25:00Z"
 }
 ```
 
-| 字段 | 类型 | 必填 | 备注 |
-|------|------|------|------|
-| `answer` | string | ✓ | 注入下一轮 prompt 的正文 |
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `answer` | string | ✓ | body injected into the next prompt |
 | `decided_by` | enum | ✓ | `user` / `coordinator` |
 
-**编排器动作**：摄取后删除 `guidance.json`，调 `adapter_call --resume`，将 answer 拼入 prompt：「上一次提问：<question>，决策：<answer>」。
+**Orchestrator action**: After ingesting, delete `guidance.json`, call `adapter_call --resume`, prepend answer to prompt: "Previous question: <question>, decision: <answer>".
 
 ---
 
-## 3. 校验门报告
+## 3. Validation Gate Report
 
 ### 3.1 `<worktree>/.gate-report.json`
 
@@ -239,57 +239,57 @@ worker 需人工/协调者决策时写。**存在即视为阻塞**。
      "output": "FAIL tests/auth.test.ts\n  expected 200, got 401"},
     {"name": "diff_audit",   "ok": true,  "duration_ms": 50,   "skipped": false, "output": ""},
     {"name": "cross_review", "ok": false, "duration_ms": 12000, "skipped": false,
-     "output": "{\"approve\":false,\"issues\":[\"JWT 密钥硬编码\"]}"}
+     "output": "{\"approve\":false,\"issues\":[\"JWT key hardcoded\"]}"}
   ],
   "summary": "test failed + cross_review rejected"
 }
 ```
 
-| 字段 | 类型 | 备注 |
-|------|------|------|
-| `ok` | bool | 所有非 skipped 步骤 ok 才为 true |
+| Field | Type | Notes |
+|-------|------|-------|
+| `ok` | bool | true only when all non-skipped steps are ok |
 | `steps[].name` | enum | `build`/`lint`/`test`/`diff_audit`/`cross_review` |
-| `steps[].output` | string | 失败时关键摘要（不超 2KB）；全文落 `logs/raw/` |
+| `steps[].output` | string | key summary on failure (no more than 2KB); full output in `logs/raw/` |
 
-**回灌用**：编排器读取所有 `ok==false` 步骤的 `output`，拼成 prompt：
+**For feedback**: Orchestrator reads all `ok==false` steps' `output` and constructs prompt:
 
 ```
-上一次提交未通过校验门，需修复后重新提交：
+The last submission did not pass the validation gate; please fix the following and resubmit:
 
 [test] FAIL tests/auth.test.ts
   expected 200, got 401
 
-[cross_review] 审查不通过：
-  - JWT 密钥硬编码
+[cross_review] Review rejected:
+  - JWT key hardcoded
 
-请只修复上述问题，不要扩大改动范围。
+Please fix only the issues above; do not expand the scope of changes.
 ```
 
 ---
 
-## 4. 任务规格（spec）
+## 4. Task Spec
 
 ### 4.1 `<project>/specs/<task_id>.md`
 
-YAML frontmatter + Markdown body：
+YAML frontmatter + Markdown body:
 
 ```markdown
 ---
 schema_version: 1
 task_id: T-0042
-title: 为 /auth 端点添加 JWT 校验
-backend: claude              # 可选；默认 orchestrator --backend 或 HARNESS_BACKEND（claude）
-model: opus-4-7              # 可选；透传给 adapter
-reviewer: codex              # 可选；覆盖 AGENTS.md 的 cross_review_reviewer
-cross_review: true           # 可选 true/false；覆盖 AGENTS.md 的 cross_review_enabled
+title: Add JWT validation to /auth endpoint
+backend: claude              # optional; defaults to orchestrator --backend or HARNESS_BACKEND (claude)
+model: opus-4-7              # optional; passed through to adapter
+reviewer: codex              # optional; overrides AGENTS.md cross_review_reviewer
+cross_review: true           # optional true/false; overrides AGENTS.md cross_review_enabled
 priority: 50
 depends_on: []
-file_scope:                  # 必填；diff_audit 据此判越界
+file_scope:                  # required; diff_audit uses this to detect out-of-scope changes
   - src/middleware/**
   - tests/auth.test.ts
-forbidden_paths:             # 可选；本任务的额外禁区（叠加全局 hooks）
+forbidden_paths:             # optional; extra forbidden paths for this task (stacked on global hooks)
   - src/billing/**
-acceptance:                  # 必填；机器可校验
+acceptance:                  # required; machine-verifiable
   - cmd: npm test -- tests/auth.test.ts
     expect_exit: 0
   - cmd: npm run lint
@@ -298,31 +298,31 @@ max_turns: 12
 max_retries: 3
 ---
 
-## 背景
+## Background
 ...
 
-## 期望行为
+## Expected Behavior
 ...
 
-## 验收清单（人读版，与 acceptance 等价）
-- [ ] /auth/login 返回 200 + Set-Cookie
-- [ ] 无 token 访问受保护端点返回 401
+## Acceptance Checklist (human-readable, equivalent to acceptance above)
+- [ ] /auth/login returns 200 + Set-Cookie
+- [ ] Accessing a protected endpoint without token returns 401
 ```
 
-**协调者入队前检查**：
+**Pre-enqueue checks by coordinator**:
 
-- `file_scope` 非空。
-- `acceptance` 至少 1 条且全部带 `cmd`。
-- `depends_on` 中所有 task_id 均存在。
-- spec body 中所有 `[ ]` 验收项都有对应 `acceptance` 命令覆盖。
+- `file_scope` is non-empty.
+- `acceptance` has at least 1 item and all have `cmd`.
+- All task_ids in `depends_on` exist.
+- All `[ ]` acceptance items in spec body have corresponding `acceptance` command coverage.
 
 ---
 
-## 5. 调用日志：`logs/raw/`
+## 5. Call Logs: `logs/raw/`
 
-文件名：`<unix_ts>-<task_id>-<backend>-<seq>.json`
+Filename: `<unix_ts>-<task_id>-<backend>-<seq>.json`
 
-内容：adapter 收到的原始 backend 输出（Claude JSON / Codex NDJSON 聚合后 / OpenCode JSON），加上 envelope：
+Contents: raw backend output received by adapter (Claude JSON / Codex NDJSON aggregated / OpenCode JSON), plus envelope:
 
 ```json
 {
@@ -336,68 +336,68 @@ max_retries: 3
     "session_id": null,
     "max_turns": 12
   },
-  "response": { ... 原始 backend 输出 ... }
+  "response": { ... raw backend output ... }
 }
 ```
 
-排障专用，不进库；保留 30 天后由 `harness gc` 清理。
+For debugging only; not stored in database; cleaned up by `harness gc` after 30 days.
 
 ---
 
-## 6. 全局配置：`~/.config/harness/config`
+## 6. Global Config: `~/.config/harness/config`
 
-INI / 简化 KV：
+INI / simplified key-value:
 
 ```ini
 budget_daily_usd = 10.00
 notify_channel   = tmux      # tmux / desktop / webhook
 session_resume_cap = 6
 dead_worker_minutes = 10
-max_concurrent_workers = 1    # 阶段四前固定 1
+max_concurrent_workers = 1    # fixed at 1 before phase 4
 ```
 
-`~/.config/harness/projects.list`：每行一个项目绝对路径。
+`~/.config/harness/projects.list`: one project absolute path per line.
 
 ---
 
-## 7. schema 升级流程
+## 7. Schema Upgrade Process
 
-### 7.1 文件布局
+### 7.1 File Layout
 
 ```
 schema/
-├── harness.sql                            # base schema：全新安装跑这个
+├── harness.sql                            # base schema: run this for fresh installs
 └── migrations/
-    ├── README.md                          # 本流程速查
-    └── V<N>__<short_description>.sql      # 增量迁移；N = 目标 user_version
+    ├── README.md                          # this process quick reference
+    └── V<N>__<short_description>.sql      # incremental migrations; N = target user_version
 ```
 
-### 7.2 加新列 / 新表的流程（举例：给 tasks 加 tags 列）
+### 7.2 Adding a New Column / Table (Example: adding tags column to tasks)
 
-1. **base schema 同步**：在 `schema/harness.sql` 的 `CREATE TABLE tasks` 里加 `tags TEXT,` 字段。`CREATE TABLE IF NOT EXISTS` 对已存在的表是 no-op；这一改只影响**全新安装**。
-2. **写迁移文件**：`schema/migrations/V2__add_tasks_tags_column.sql`：
+1. **Sync base schema**: Add `tags TEXT,` field to the `CREATE TABLE tasks` statement in `schema/harness.sql`. `CREATE TABLE IF NOT EXISTS` is a no-op for existing tables; this change only affects **fresh installs**.
+2. **Write migration file**: `schema/migrations/V2__add_tasks_tags_column.sql`:
    ```sql
    ALTER TABLE tasks ADD COLUMN tags TEXT;
    ```
-   不要在迁移文件里写 `PRAGMA user_version=2`——迁移 runner 会自动设置。
-3. **改 SCHEMA_VERSION**：`src/harness/db.py` 顶端 `SCHEMA_VERSION = 2`。
-4. **同步 base SQL 顶端 PRAGMA**：`schema/harness.sql` 把 `PRAGMA user_version=1` 改为 `=2`。
-5. **三端代码同步改**（碰新字段的）：`db.py`、`db_cli.py`、`adapter` 落日志格式、`coordinator-tool` 用法。
-6. **本机自测**：把旧 `.harness/harness.db`（user_version=1）跑一次 `harness init` 或重启 orchestrator——`init()` 应自动跑 V2 迁移。
-7. **commit**：base SQL + V2 文件 + SCHEMA_VERSION 改动同一个 commit。
+   Do not write `PRAGMA user_version=2` in migration files — the migration runner sets this automatically.
+3. **Update SCHEMA_VERSION**: `SCHEMA_VERSION = 2` at the top of `src/harness/db.py`.
+4. **Sync base SQL header PRAGMA**: In `schema/harness.sql`, change `PRAGMA user_version=1` to `=2`.
+5. **Sync three-end code changes** (anything touching the new field): `db.py`, `db_cli.py`, adapter log format, `coordinator-tool` usage.
+6. **Local self-test**: Take an old `.harness/harness.db` (user_version=1) and run `harness init` or restart orchestrator once — `init()` should automatically run the V2 migration.
+7. **Commit**: base SQL + V2 file + SCHEMA_VERSION change in the same commit.
 
-### 7.3 不删旧字段
+### 7.3 Never Delete Old Columns
 
-- 兼容回退（如果新版有问题，可以 `git revert` 让旧代码读老 DB）。
-- 历史 backup（`.harness/backups/harness-*.db`）仍可读。
-- 真要删，等数据迁完 + 跨越一个稳定大版本之后单独做 deprecation。
+- Allows rollback compatibility (if the new version has issues, `git revert` lets old code read the old DB).
+- Historical backups (`.harness/backups/harness-*.db`) remain readable.
+- If deletion is truly needed, wait until data is migrated + one stable major version passes, then do a separate deprecation.
 
-### 7.4 runner 行为（`db._apply_migrations`）
+### 7.4 Runner Behavior (`db._apply_migrations`)
 
-- 扫 `schema/migrations/V*.sql`，按 N 升序。
-- 仅对 `current_user_version < N <= SCHEMA_VERSION` 范围执行。
-- 每应用一份 → `PRAGMA user_version=N` 立即落，下次启动接着续。
-- 全新安装：`base SQL` 直接把 user_version 设到当前 SCHEMA_VERSION → runner 看 current==target，no-op。
-- 失败：抛出原 sqlite3 异常，不偷偷吞——上游 `init()` 会向 caller 报错。
+- Scans `schema/migrations/V*.sql` in ascending N order.
+- Only executes for `current_user_version < N <= SCHEMA_VERSION` range.
+- After applying each file → immediately writes `PRAGMA user_version=N`; next startup picks up from there.
+- Fresh install: `base SQL` directly sets user_version to current SCHEMA_VERSION → runner sees current==target, no-op.
+- Failure: raises original sqlite3 exception, does not silently swallow — upstream `init()` reports error to caller.
 
-测试覆盖：`tests/unit/test_db.py::test_apply_migrations_*`（4 case），含目录缺失、已应用跳过、超目标版本忽略。
+Test coverage: `tests/unit/test_db.py::test_apply_migrations_*` (4 cases), including missing directory, already-applied skip, and beyond-target-version ignore.

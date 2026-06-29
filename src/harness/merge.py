@@ -1,7 +1,7 @@
 """MergeRequest + serial merger.
 
 Workers post on gate-pass; the orchestrator's main thread drains the queue
-and runs git merge strictly serially (阶段四验收：合并阶段无 race).
+and runs git merge strictly serially (phase-four acceptance: no merge race).
 """
 
 from __future__ import annotations

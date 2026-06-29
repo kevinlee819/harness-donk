@@ -1,0 +1,54 @@
+# Decisions
+
+Records **non-trivial architecture and design decisions** made in this project, along with the reasoning for choosing X over Y.
+
+## Why This File Exists
+
+Agents have no project memory. If a choice has already been discussed and settled ("use PostgreSQL not SQLite", "SSE not WebSocket for messaging", "env vars not config files"), without writing it down the next agent will re-propose alternatives — wasting a turn or worse, reverting a deliberate decision.
+
+Workers read this before starting any task. The coordinator also scans it before writing specs.
+
+## What Goes Here / What Doesn't
+
+**Include**:
+
+- Architecture-level choices (language, framework, storage, messaging, deployment)
+- General conventions (interface style, error handling patterns, naming rules)
+- Rejected alternatives and the reason they were rejected
+- Rules that multiple tasks need to reference
+
+**Exclude**:
+
+- Implementation details (variable names, function signatures — the code is the truth)
+- One-off temporary workarounds (those go in error-journal)
+- Things still under discussion, not yet decided
+
+## Format
+
+Each entry in reverse chronological order, with 5 fields:
+
+```
+## YYYY-MM-DD: <one-line decision>
+
+- Background: <why this choice was needed>
+- Options: <alternatives considered>
+- Decision: <what was chosen>
+- Rationale: <why this, key trade-off>
+- Impact: <which code/processes this constrains>
+```
+
+## Example
+
+```
+## 2026-01-15: Task queue stored in SQLite, not Redis
+
+- Background: needed a reliable inter-process task queue
+- Options: (1) SQLite WAL file queue; (2) Redis queue; (3) Postgres LISTEN/NOTIFY
+- Decision: SQLite WAL
+- Rationale: single-machine, no external dependency, crash recovery is transactional; Redis adds a process
+- Impact: all backends write to the queue via src/harness/db.py; database file must not be on NFS
+```
+
+---
+
+<!-- append new entries here -->

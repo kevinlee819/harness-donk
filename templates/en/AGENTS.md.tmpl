@@ -1,0 +1,67 @@
+# AGENTS.md — {{PROJECT_NAME}}
+
+This file is the shared protocol that all agents in this project must read before starting any task. Referenced via the `CLAUDE.md → AGENTS.md` symlink.
+
+## 1. Role & Restrictions
+
+- You work in your own git worktree; branch names start with `harness/`.
+- **Forbidden**: push, merge into main branch, or leave your worktree.
+- **Forbidden**: modify `.harness/` (owned by the orchestrator and other workers).
+- When the task is done, you must `git add` and `git commit`.
+
+## 2. Reading Order
+
+Before writing any code, read in order:
+
+1. `specs/<task_id>.md` — the task spec (your only source of requirements: background / expected behavior / file scope / acceptance criteria / out-of-scope / risks)
+2. `docs/decisions.md` (if present) — settled architectural decisions; **don't re-open already-closed debates**
+3. `docs/error-journal.md` (if present) — known pitfalls + fixes; **steer clear of these traps**
+
+Only do what the spec asks. **Do not expand scope.** Unrequested "while I'm here" improvements will fail the gate or be rejected by cross-review.
+
+## 3. Validation Gate
+
+Before merging to main, the following commands run automatically; any failure sends the error back for rework.
+
+```gate
+build: ""
+lint: ""
+test: ""
+diff_audit: ""
+cross_review_enabled: false
+cross_review_reviewer: codex
+```
+
+> After project init, fill in the commands above with real ones for this project (e.g. `npm test` / `make test`). `""` means skip that step.
+>
+> When `cross_review_enabled=true`, the gate feeds the base..HEAD diff to the `cross_review_reviewer` backend (`claude` / `codex`), asking for `{approve, issues}` JSON. A reject counts as gate failure. Recommended: writer ≠ reviewer — if this task is done by claude, set reviewer to codex; and vice versa.
+
+## 4. Retry Loop
+
+If the gate fails, the next turn will prepend the failed step's error output to the prompt. Fix only what's pointed out; do not expand scope.
+
+## 5. When You Need a Decision
+
+If you need the user/coordinator to make a choice, **don't guess** — write a blocking guidance file to `$HARNESS_WORKER_DIR/guidance.json` (absolute path, already exported by harness), format:
+
+```json
+{
+  "schema_version": 1,
+  "blocking": true,
+  "task_id": "<env $HARNESS_TASK_ID>",
+  "question": "the question requiring a decision",
+  "context": "decision context (optional)",
+  "options": ["Option A", "Option B"],
+  "created": "<current UTC ISO-8601>"
+}
+```
+
+Write the file and immediately end the turn (don't continue coding). Harness will pause this task and notify the user. When the user replies, a new turn will include the "previous question / decision" context in the prompt.
+
+Schema details: docs/data-schemas.md §2.2.
+
+## 6. Security
+
+- Paths matching `prod` / `secret` will be intercepted by hooks.
+- Git operations touching the main branch will be intercepted by hooks.
+- When intercepted, stderr will explain the reason; follow the prompt to correct.

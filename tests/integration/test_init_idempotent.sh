@@ -30,11 +30,12 @@ test_init_creates_expected_files() {
   [[ -d "$d/.harness/logs/raw" ]] || _assert_fail "logs/raw/"
   [[ -d "$d/specs" ]]            || _assert_fail "specs/"
 
-  # 知识层文件（参照 project-harness 思想；worker 在 AGENTS.md 必读列表里读它们）
+  # Knowledge-layer files (worker reads them before every task).
+  # Default locale is English; check for content present in en templates.
   assert_file_exists "$d/docs/decisions.md"
   assert_file_exists "$d/docs/error-journal.md"
-  assert_contains "决策记录" "$(cat "$d/docs/decisions.md")"
-  assert_contains "错误日志" "$(cat "$d/docs/error-journal.md")"
+  assert_contains "Decisions" "$(cat "$d/docs/decisions.md")"
+  assert_contains "Error Journal" "$(cat "$d/docs/error-journal.md")"
 }
 
 test_init_preserves_existing_knowledge_files() {

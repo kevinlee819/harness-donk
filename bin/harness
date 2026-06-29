@@ -41,20 +41,25 @@ cmd_init() {
   export HARNESS_DB="$cwd/.harness/harness.db"
   _db init || { echo "db init failed" >&2; exit 1; }
 
+  # Pick locale-specific template dir; fall back to root templates/ if absent.
+  local lang="${HARNESS_LANG:-en}"
+  local tmpl_dir="$HARNESS_HOME/templates/$lang"
+  [[ -d "$tmpl_dir" ]] || tmpl_dir="$HARNESS_HOME/templates"
+
   if [[ ! -f "$cwd/AGENTS.md" ]]; then
     sed -e "s/{{PROJECT_NAME}}/$(basename "$cwd")/g" \
         -e "s/^cross_review_reviewer: codex$/cross_review_reviewer: $reviewer/" \
-        "$HARNESS_HOME/templates/AGENTS.md.tmpl" > "$cwd/AGENTS.md"
+        "$tmpl_dir/AGENTS.md.tmpl" > "$cwd/AGENTS.md"
     echo "configured cross_review_reviewer: $reviewer (writer=$writer)"
   fi
   [[ ! -L "$cwd/CLAUDE.md" && ! -f "$cwd/CLAUDE.md" ]] && ln -s AGENTS.md "$cwd/CLAUDE.md"
 
-  # docs/decisions.md + docs/error-journal.md：项目级知识沉淀（参照 project-harness）
-  # 已存在则不覆盖（人写的内容不能被工具盖掉）
+  # docs/decisions.md + docs/error-journal.md — project knowledge layer.
+  # Never overwrite if the file already exists (user content must not be clobbered).
   mkdir -p "$cwd/docs"
   for kf in decisions error-journal; do
     if [[ ! -f "$cwd/docs/${kf}.md" ]]; then
-      cp "$HARNESS_HOME/templates/${kf}.md.tmpl" "$cwd/docs/${kf}.md"
+      cp "$tmpl_dir/${kf}.md.tmpl" "$cwd/docs/${kf}.md"
       echo "created docs/${kf}.md"
     fi
   done

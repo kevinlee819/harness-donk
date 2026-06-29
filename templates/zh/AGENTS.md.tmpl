@@ -1,0 +1,67 @@
+# AGENTS.md — {{PROJECT_NAME}}
+
+本文件是所有 agent 在本项目内必读的共享规约。被 `CLAUDE.md → AGENTS.md` 软链引用。
+
+## 1. 角色与禁区
+
+- 你工作在自己的 git worktree 中，分支名以 `harness/` 开头。
+- **禁止** push、禁止 merge 到主分支、禁止离开当前工作目录。
+- **禁止** 修改 `.harness/`（属于编排器和其他 worker）。
+- 完成任务后必须 `git add` 并 `git commit`。
+
+## 2. 必读顺序
+
+开干前按序读：
+
+1. `specs/<task_id>.md` —— 本任务说明书（你的唯一需求来源，含背景 / 期望行为 / 文件范围 / 验收清单 / 非目标 / Risks）
+2. `docs/decisions.md`（若存在）—— 项目已定的架构 / 约定，**不要重新讨论已拍板的事**
+3. `docs/error-journal.md`（若存在）—— 项目踩过的坑 + 修法，**绕开**这些已知陷阱
+
+只完成 spec 内的工作；**不要扩大范围**。spec 没要求的"顺手优化"会让 gate 失败或被跨模型审查 reject。
+
+## 3. 校验门
+
+合并到主分支前会自动跑以下命令；任一失败即回灌错误重做。
+
+```gate
+build: ""
+lint: ""
+test: ""
+diff_audit: ""
+cross_review_enabled: false
+cross_review_reviewer: codex
+```
+
+> 项目初始化后，请把上面的命令补全成本项目实际可执行的命令（如 `npm test` / `make test`）。`""` 表示跳过该步骤。
+>
+> `cross_review_enabled=true` 时，gate 会把 base..HEAD 的 diff 喂给 `cross_review_reviewer` 指定的 backend（`claude` / `codex`），要求其以 JSON 形式回 `{approve, issues}`。审查未过则视为 gate 失败。建议「写的不审，审的不写」——如本任务由 claude 完成，reviewer 配 codex；反之亦然。
+
+## 4. 回灌
+
+如果 gate 失败，下一轮会把失败步骤的错误输出拼到 prompt 重发。请只修复指出的问题，不扩大改动。
+
+## 5. 需决策时
+
+如果你需要用户/协调者拍板的选择题，**不要瞎猜**——写一个 blocking guidance 到环境变量 `$HARNESS_WORKER_DIR/guidance.json` （绝对路径，harness 已 export），格式：
+
+```json
+{
+  "schema_version": 1,
+  "blocking": true,
+  "task_id": "<env $HARNESS_TASK_ID>",
+  "question": "你需要决策的问题",
+  "context": "决策背景（可选）",
+  "options": ["可选方案 A", "可选方案 B"],
+  "created": "<当前 UTC ISO-8601>"
+}
+```
+
+写完后立即结束本轮（不要继续编码），harness 会暂停本任务并通知用户。用户答复后会有新一轮调用，prompt 里会带「上一次提问 / 决策」上下文。
+
+schema 详见 docs/data-schemas.md §2.2。
+
+## 6. 安全
+
+- 涉及 `prod` / `secret` 路径会被 hook 拦截。
+- 涉及主分支的 git 操作会被 hook 拦截。
+- 触发拦截时 stderr 会有原因，按提示修正即可。

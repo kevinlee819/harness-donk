@@ -1,104 +1,104 @@
-# 多 Agent 自驱动编码 Harness 设计文档
+# Multi-Agent Self-Driving Coding Harness — Design Document
 
 
 
-## 1. 背景与目标
+## 1. Background and Goals
 
-本系统是一套个人工作流级别的自动化编码 harness。它对用户只暴露**一个入口命令**,该命令启动一个被武装为"协调者"的 Claude Code 会话作为唯一对话面;协调者在后台把编码任务分发给多个 CLI 执行 agent(Codex、OpenCode 等),通过确定性校验门验证其工作,形成可长时间无人值守运行的自驱动闭环。用户只与协调者对话,协调者只在必要时打扰用户。
+This system is a personal workflow-level automated coding harness. It exposes a **single entry-point command** to the user, which starts a Claude Code session configured as a "coordinator" as the sole conversation interface; the coordinator dispatches coding tasks to multiple CLI execution agents (Codex, OpenCode, etc.) in the background, verifies their work through deterministic validation gates, and forms a self-driving loop capable of running unattended for long periods. The user only talks to the coordinator, which only interrupts the user when necessary.
 
-设计目标按优先级:
+Design goals in priority order:
 
-1. **单一入口、上下文归我所有**:用户只面对一个对话面;会话、任务、成本、产物的上下文全部由本系统持有和管理,而非散落在被调用的引擎里。
-2. **自驱动**:任务从队列进入,经派发、执行、校验、合并自动流转;失败自动回灌重试;只在真正需要决策时升级到人。
-3. **按需打扰、随时可观测**:协调者默认沉默,只在需要决策、验收、故障时主动找用户;用户想了解进展时,任务状态与每个 agent 的工作随时可查。
-4. **可靠**:任何进程在任何时刻崩溃,系统状态不丢、不脏,可从磁盘恢复续跑。
-5. **可控**:危险操作被确定性拦截(非靠提示词约束);变更合并前可审查;成本有硬性预算闸。
-6. **简单**:bash + 标准 Unix 工具(jq、sqlite3、tmux)实现,无需常驻服务或专用协议;单机运行。
+1. **Single entry point, context ownership**: The user only faces one conversation interface; the context for sessions, tasks, costs, and artifacts is all held and managed by this system — not scattered across the engines being called.
+2. **Self-driving**: Tasks enter from the queue and automatically flow through dispatch, execution, validation, and merge; failures are automatically fed back for retry; escalation to humans only when a real decision is needed.
+3. **Interrupt-on-demand, always observable**: The coordinator is silent by default, only proactively reaching out when a decision is needed, acceptance is pending, or a failure occurs; when the user wants to know progress, task state and each agent's work is always queryable.
+4. **Reliable**: Any process crashing at any moment — system state is not lost or corrupted; can resume from disk.
+5. **Controllable**: Dangerous operations are intercepted deterministically (not via prompt constraints); changes can be reviewed before merging; costs have hard budget gates.
+6. **Simple**: Implemented with bash + standard Unix tools (jq, sqlite3, tmux); no persistent services or specialized protocols; single-machine operation.
 
-非目标:跨机器分布式编排、对等 agent 网络(A2A)、通用多租户平台。需求出现前不做。
+Non-goals: cross-machine distributed orchestration, peer agent networks (A2A), general multi-tenant platforms. Not built until requirements emerge.
 
-## 2. 核心设计原则
+## 2. Core Design Principles
 
-**原则一:统一入口持有上下文。** 用户永远不直接使用底层引擎(不裸跑 `claude`)。入口命令启动一个协调者会话作为唯一对话面;session、成本、产物的账本由本系统记录在项目的 `.harness/` 中。放弃上下文所有权,本系统即名存实亡——这是不可妥协的分界线。
+**Principle 1: Single entry point holds context.** The user never directly uses the underlying engines (no bare `claude`). The entry command starts a coordinator session as the sole conversation interface; the ledger for sessions, costs, and artifacts is recorded by this system in the project's `.harness/`. Surrendering context ownership makes this system a name without substance — this is a non-negotiable dividing line.
 
-**原则二:聪明的判断与确定的执行分离。** 协调者(LLM)只负责判断与决策:拆解任务、决定派什么给谁、判读结果、决定是否升级到人。真正的进程驱动由确定性的 dumb loop + adapter 承担。协调者通过我们提供的**脚本工具**下达指令(本质是写任务进队列),绝不自己用 send-keys 去驱动别的 agent。
+**Principle 2: Intelligent judgment and deterministic execution are separated.** The coordinator (LLM) is only responsible for judgment and decisions: decomposing tasks, deciding what to dispatch to whom, interpreting results, deciding whether to escalate to humans. The actual process driving is handled by the deterministic dumb loop + adapter. The coordinator expresses intent through **script tools** we provide (which essentially writes tasks to the queue); it never uses send-keys to drive other agents itself.
 
-**原则三:CLI 即协议。** 调用任何执行 agent 都不使用专用协议,就是 Unix 子进程:提示词从 stdin/文件进,JSON 从 stdout 出,退出码表示成败。一次调用是"一份任务简报"而非"一轮对话"——agent 在调用内部自主运行多轮 think→工具→观察直到完成或达上限。
+**Principle 3: CLI is the protocol.** Calling any execution agent uses no specialized protocol — just Unix subprocesses: prompts go in via stdin/file, JSON comes out on stdout, exit codes indicate success/failure. A single call is "a task brief" not "a conversation round" — the agent runs autonomously through multiple think→tool→observe cycles internally until done or at the turn limit.
 
-**原则四:文件、git、嵌入式 SQLite 即媒介。** Agent 间不靠内存或网络通信。状态按受众分层:**面向 agent 与人的交互界面是文件**(spec、status、guidance、inbox);**编排器私有的事务性状态是 SQLite**(队列、状态机、迁移史、会话注册、成本账)。代码成果以 git commit 落盘。状态只活在磁盘,崩溃恢复天然成立。
+**Principle 4: Files, git, embedded SQLite are the medium.** Agents don't communicate via memory or network. State is layered by audience: **the interface for agents and humans is files** (spec, status, guidance, inbox); **the orchestrator's private transactional state is SQLite** (queue, state machine, transition history, session registry, cost ledger). Code artifacts are committed to git. State only lives on disk; crash recovery is natural.
 
-**原则五:进程临时、对话持久。** 每轮交互是独立短命进程调用,通过 session ID(`--resume`)共享对话历史。会话续接有上限,达上限后 checkpoint 落盘、开新会话(新鲜上下文,防长会话走形)。
+**Principle 5: Processes are ephemeral, conversations are persistent.** Each interaction is an independent short-lived process call, sharing conversation history via session ID (`--resume`). Session resumption has a cap; when reached, a checkpoint is written to disk, a new session begins (fresh context, preventing long-session drift).
 
-**原则六:生成者与裁判分离。** 写代码的 agent 不能自我宣告完成。完成与否由外部裁判判定:确定性门(测试/lint/类型/构建)为第一层,跨模型对抗审查为第二层。"完成"是机器可校验的标准。
+**Principle 6: Generator and judge are separated.** The agent writing code cannot declare itself done. Completion is determined by external judges: deterministic gates (tests/lint/type/build) as the first layer, cross-model adversarial review as the second layer. "Done" is a machine-verifiable standard.
 
-**原则七:确定性约束放 hooks,不放提示词。** 禁 force push、禁改敏感目录、未过门不许停——硬约束全部用 hooks 在工具执行关口确定性拦截。
+**Principle 7: Deterministic constraints go in hooks, not prompts.** No force push, no touching sensitive directories, no stopping without passing the gate — hard constraints all use hooks to deterministically intercept at the tool execution checkpoint.
 
-**原则八:控制面与数据面分离。** tmux 只承担控制/观测面(持久会话、随时观察、断连存活),绝不承担数据面。机器读取的数据走结构化接口(JSON + 黑板),绝不用 capture-pane 刮屏解析有结构化输出的 agent。
+**Principle 8: Control plane and data plane are separated.** tmux only handles the control/observation plane (persistent sessions, always observable, survives disconnection); it never handles the data plane. Machine-readable data goes through structured interfaces (JSON + blackboard); never use capture-pane scraping to parse agents with structured output.
 
-## 3. 双平面架构
+## 3. Dual-Plane Architecture
 
-系统由两个职责分明的平面构成,各有独立的可见性策略。
+The system consists of two planes with distinct responsibilities, each with independent visibility policies.
 
 ```
-┌────────────────────── 对话平面(用户主入口)───────────────────────┐
-│                                                                    │
-│  用户 ⇄ 协调者会话(harness-infi 启动的 Claude Code,武装为 coordinator) │
-│        · 持有与用户的对话与上下文                                   │
-│        · 默认沉默,仅在 需决策/待验收/故障 时主动打扰用户           │
-│        · 通过脚本工具下达指令(写任务进队列),不自己驱动执行 agent │
-│                                                                    │
-└──────────────────────────────┬───────────────────────────────────┘
-                                │ 脚本工具(harness-task add / query …)
-                                ▼  写入 .harness/harness.db(任务队列)
-┌────────────────────── 执行平面(后台车间)─────────────────────────┐
-│                                                                    │
-│  orchestrator.sh(dumb loop,确定性驱动)                           │
-│    取任务→建 worktree→经 adapter 调执行 agent→轮询黑板→校验门→合并  │
-│                                                                    │
-│  执行 agent:Claude Code(主力)/ Codex / OpenCode(并行·备用·审查) │
-│    各自在独立 tmux pane + 独立 git worktree;默认隐藏,随时可观测   │
-│                                                                    │
-└──────────────────────────────┬───────────────────────────────────┘
+┌──────────────────── Conversation Plane (user's main entry) ───────────────────────┐
+│                                                                                    │
+│  User ⇄ Coordinator session (Claude Code started by harness-infi, armed as coordinator) │
+│        · holds all conversation and context with the user                          │
+│        · silent by default; only proactively reaches out when decision/acceptance/failure needed │
+│        · expresses intent through script tools (writes tasks to queue); doesn't drive agents directly │
+│                                                                                    │
+└──────────────────────────────┬───────────────────────────────────────────────────┘
+                                │ script tools (harness-task add / query …)
+                                ▼  writes to .harness/harness.db (task queue)
+┌──────────────────── Execution Plane (background workshop) ────────────────────────┐
+│                                                                                    │
+│  orchestrator.sh (dumb loop, deterministic driver)                                │
+│    claim task → create worktree → call execution agent via adapter → poll blackboard → gate → merge │
+│                                                                                    │
+│  Execution agents: Claude Code (primary) / Codex / OpenCode (parallel/backup/review) │
+│    each in isolated tmux pane + isolated git worktree; hidden by default, always observable │
+│                                                                                    │
+└──────────────────────────────┬───────────────────────────────────────────────────┘
                                 ▼
-      共享底座:AGENTS.md(规约)· .harness/harness.db(真相)· git(代码交接)
+      shared base: AGENTS.md (contract) · .harness/harness.db (truth) · git (code handoff)
 ```
 
-### 3.1 对话平面
+### 3.1 Conversation Plane
 
-用户的唯一对话面。`harness-infi` 在一个 tmux 会话里,以协调者配置(专属 system prompt / AGENTS.md / 工具集)启动一个交互式 Claude Code 会话。该会话即"主协调 agent":
+The user's sole conversation interface. `harness-infi` starts an interactive Claude Code session in a tmux session with coordinator configuration (dedicated system prompt / AGENTS.md / toolset). That session is the "main coordinating agent":
 
-- 持有与用户的全部对话上下文;享受 Claude Code 原生交互体验(我们不重做 TUI)。
-- 它的工具不是写代码,而是:拆任务、调用脚本工具入队、查询黑板看进展、判读校验报告、决定何时升级到人。
-- **打扰策略**:默认沉默。仅在三类时刻经 Notification 主动开口——① 需要用户决策(guidance);② 任务完成待验收;③ 出现它无法自行解决的故障。
-- 因为是交互式会话(非 `claude -p` 程序化调用),走用户**订阅额度**。
+- Holds the full conversation context with the user; enjoys Claude Code's native interactive experience (we don't rebuild the TUI).
+- Its tools are not for writing code, but for: decomposing tasks, calling script tools to enqueue, querying the blackboard for progress, interpreting validation reports, deciding when to escalate to humans.
+- **Interrupt policy**: Silent by default. Only proactively speaks via Notification at three moments — ① decision needed from user (guidance); ② task complete pending acceptance; ③ failure it cannot resolve on its own.
+- Because it's an interactive session (not a `claude -p` programmatic call), it runs against the user's **subscription quota**.
 
-### 3.2 执行平面
+### 3.2 Execution Plane
 
-协调者看不见过程、只看结果的后台车间,对用户默认隐藏。
+The background workshop that the coordinator sees only the results of, hidden from the user by default.
 
-- **orchestrator.sh**:确定性 dumb loop,是任务的真正执行驱动者。智能不在它身上,全在协调者的决策与校验门的反馈回路里。
-- **执行 agent**:Claude Code 主力,Codex / OpenCode 用于并行、备用模型、跨模型审查。每个执行 agent 在独立 worktree 的独立分支工作,永不接触主分支;其进程展示在 tmux pane 中(仅供观测,非驱动)。
-- 执行平面的 agent 调用是程序化的(`claude -p` 等),走**程序化额度**(API 计价)。
+- **orchestrator.sh**: A deterministic dumb loop — the real driver of task execution. Intelligence is not here; it's all in the coordinator's decisions and the gate's feedback loop.
+- **Execution agents**: Claude Code as the primary; Codex / OpenCode for parallel runs, backup models, and cross-model review. Each execution agent works in an isolated worktree on an isolated branch, never touching the main branch; their processes are shown in tmux panes (for observation only, not for driving).
+- Execution plane agent calls are programmatic (`claude -p` etc.), running against **programmatic quota** (API pricing).
 
-两平面的计费天然分离:高频对话走订阅、批量执行走程序化额度,分别可控。
+The two planes' billing is naturally separated: high-frequency conversation runs on subscription; batch execution runs on programmatic quota — each independently controllable.
 
-### 3.3 调度机制:协调者如何指挥执行平面(方案 a)
+### 3.3 Scheduling: How the Coordinator Commands the Execution Plane (Option A)
 
-协调者**不直接驱动**执行 agent。它只通过脚本工具表达意图,真正的进程编排由 dumb loop 完成:
+The coordinator **does not directly drive** execution agents. It only expresses intent through script tools; actual process orchestration is done by the dumb loop:
 
-1. 协调者判断需要做某任务 → 调脚本工具 `harness-task add <spec>`(本质:向 `.harness/harness.db` 的 tasks 表 INSERT 一行)。
-2. orchestrator.sh 的循环独立运行,取到该任务 → 建 worktree → 经 adapter 调执行 agent → 跑校验门 → 合并或回灌。
-3. 协调者随时调 `harness-task query` 读黑板了解进展;任务终态(完成/失败/阻塞)经 Notification 回到协调者,由它决定是否、如何告知用户。
+1. Coordinator determines a task needs to be done → calls script tool `harness-task add <spec>` (essentially: INSERT a row into the `tasks` table of `.harness/harness.db`).
+2. orchestrator.sh's loop runs independently, picks up the task → creates worktree → calls execution agent via adapter → runs gate → merges or feeds back.
+3. Coordinator can call `harness-task query` at any time to read the blackboard for progress; task terminal states (complete/failed/blocked) return to the coordinator via Notification, which then decides whether and how to inform the user.
 
-如此:**聪明的部分(协调者)只做判断,确定的部分(dumb loop + adapter)做执行**,职责不混;且执行平面可独立于对话平面运行(协调者会话关掉,后台任务照跑)。
+This way: **the intelligent part (coordinator) only judges; the deterministic part (dumb loop + adapter) executes** — responsibilities don't mix; and the execution plane can run independently of the conversation plane (coordinator session closes, background tasks keep running).
 
-## 4. 通信机制(数据面)
+## 4. Communication Mechanism (Data Plane)
 
-### 4.1 调用与会话:session resume + JSON
+### 4.1 Calls and Sessions: Session Resume + JSON
 
-三个后端会话能力不对称,必须经 adapter 归一化,编排逻辑不接触原生格式。
+The three backends have asymmetric session capabilities and must be normalized by the adapter; orchestration logic never touches native formats.
 
-**Claude Code(adapter: claude.sh)**
+**Claude Code (adapter: claude.sh)**
 
 ```bash
 RESP=$(timeout 900 claude -p "$(cat "$TASK_FILE")" --output-format json --max-turns 12)
@@ -106,53 +106,53 @@ SID=$(echo "$RESP" | jq -r '.session_id')
 RESP=$(timeout 900 claude -p "$(cat "$FOLLOWUP")" --resume "$SID" --output-format json --max-turns 8)
 ```
 
-session_id 可程序化获取并记账;`--output-format json` 取 `.result`(给人)与 `.session_id`/`.cost_usd`/`.num_turns`(给机器);自定义 session ID 须为合法 UUID。
+session_id can be obtained programmatically and recorded; `--output-format json` captures `.result` (for humans) and `.session_id`/`.cost_usd`/`.num_turns` (for machines); custom session IDs must be valid UUIDs.
 
-**Codex(adapter: codex.sh)**
+**Codex (adapter: codex.sh)**
 
 ```bash
 codex exec "$(cat "$TASK_FILE")" --json
 codex exec resume --last "$(cat "$FOLLOWUP")" --json
 ```
 
-硬约束:Codex 无法程序化获取当前 session ID,只能依赖按工作目录划分的 `--last`。故规定:**每个 worktree 同时最多一个 Codex 会话,且对该 worktree 的 Codex 调用必须串行**。其 `--json` 为 NDJSON 事件流,adapter 聚合为单结果对象;会话以 JSONL 落盘 `~/.codex/sessions/`,可作审计。
+Hard constraint: Codex cannot obtain the current session ID programmatically — can only rely on `--last` filtered by working directory. Therefore: **at most one Codex session per worktree at a time, and Codex calls to that worktree must be serialized**. Its `--json` is an NDJSON event stream; the adapter aggregates it into a single result object; sessions are written as JSONL to `~/.codex/sessions/` for auditing.
 
-**OpenCode(adapter: opencode.sh)**
+**OpenCode (adapter: opencode.sh)**
 
 ```bash
 opencode run "$(cat "$TASK_FILE")" --session "$SESSION_ID" --json
 ```
 
-### 4.2 黑板:文件层(agent/人界面)+ SQLite 层(编排器真相)
+### 4.2 Blackboard: File Layer (agent/human interface) + SQLite Layer (orchestrator truth)
 
-文件层是 agent→编排器、人→编排器的写入界面;SQLite 层(`.harness/harness.db`)是编排器决策的唯一真相。worker 原子写自己的 `status.json`,编排器轮询时**摄取**进库——文件是 API,数据库是状态,不构成双真相。
+The file layer is the write interface for agent→orchestrator and human→orchestrator; the SQLite layer (`.harness/harness.db`) is the sole truth for orchestrator decisions. Workers atomically write their own `status.json`; the orchestrator **ingests** it into the database on each poll — files are the API, the database is the state; there is no double source of truth.
 
-文件层两个核心 schema:
+Two core schemas in the file layer:
 
-**workers/<id>/status.json**(worker 独占写)
+**workers/<id>/status.json** (worker exclusive write)
 
 ```json
 {
   "schema_version": 1, "worker_id": "w1", "backend": "claude",
   "session_id": "uuid-...", "status": "working", "task_id": "T-042",
-  "branch": "harness/T-042", "progress": "JWT 中间件已完成,正在写测试",
+  "branch": "harness/T-042", "progress": "JWT middleware done, writing tests",
   "turns": 42, "blockers": [], "updated": "2026-06-12T10:15:00Z"
 }
 ```
 
-**workers/<id>/guidance.json**(worker 需决策时写,升级触发器)
+**workers/<id>/guidance.json** (written when worker needs a decision — escalation trigger)
 
 ```json
 {
   "schema_version": 1, "blocking": true,
-  "question": "JWT 签名用 RS256 还是 HS256?",
-  "context": "RS256 更安全但需密钥管理", "created": "2026-06-12T10:20:00Z"
+  "question": "Use RS256 or HS256 for JWT signing?",
+  "context": "RS256 is more secure but requires key management", "created": "2026-06-12T10:20:00Z"
 }
 ```
 
-升级路径:编排器轮询到 `blocking: true` → 写入待决策事件 → 经 Notification 上抛给协调者 → 协调者按打扰策略决定是否问用户 → 用户/协调者的答复写入 `inbox/<id>.answer` → 编排器用保留的 session_id `--resume` 续接原上下文。这就是"agent 及时提示主入口确认变更"的完整实现。
+Escalation path: orchestrator polls and sees `blocking: true` → writes pending decision event → escalated via Notification to coordinator → coordinator decides whether to ask the user per interrupt policy → user/coordinator's answer written to `inbox/<id>.answer` → orchestrator resumes original context with saved session_id via `--resume`. This is the complete implementation of "agent promptly asks main entry for decision on changes."
 
-**SQLite 层 schema 草案**(`.harness/harness.db`):
+**SQLite layer schema draft** (`.harness/harness.db`):
 
 ```sql
 CREATE TABLE tasks (
@@ -177,7 +177,7 @@ CREATE TABLE calls (
 );
 ```
 
-原子 claim(取任务并标记派发,一条语句无竞态):
+Atomic claim (claim a task and mark as dispatched, single statement, no race):
 
 ```bash
 sqlite3 .harness/harness.db "UPDATE tasks
@@ -186,232 +186,232 @@ sqlite3 .harness/harness.db "UPDATE tasks
   RETURNING id, spec_path;"
 ```
 
-### 4.3 hooks:事件与强制层
+### 4.3 Hooks: Event and Enforcement Layer
 
-配置于项目 `.claude/settings.json`:
+Configured in project `.claude/settings.json`:
 
-1. **PreToolUse = 确定性安全门**。matcher `Bash`,检查 `tool_input.command`,命中危险模式 exit 2 拦截。拦截原因必须写 stderr(写 stdout 模型收不到反馈)。
-2. **Stop hook**(完成度强制):**当前不实装**。原设计意图是用 Stop 在 worker 退出时强制完成度(未全绿即 block 迫使继续),但实现后发现与既有机制冗余:gate.sh 是完成度的权威 + 不过则错误回灌 + retries 封顶;PreToolUse 已覆盖越界写。Stop hook 上下文比 gate 弱,且强逼不退会爆 token 预算。详见 [hooks/stop.md](../hooks/stop.md)。阶段四并行 worker 出现真实病例时再重评。
-3. **Notification = 信号线**。事件路由到协调者 / 通知渠道,免去空转轮询。
+1. **PreToolUse = deterministic security gate**. Matcher `Bash`, checks `tool_input.command`, exits 2 to block on dangerous pattern match. Block reasons must be written to stderr (writing stdout means the model never receives the feedback).
+2. **Stop hook** (completion enforcement): **Not currently implemented**. The original design intent was to use Stop to enforce completion when a worker exits (blocking exit if not all-green, forcing continuation), but after implementation it was found redundant with existing mechanisms: gate.sh is the authority on completion + error feedback on failure + retries have a cap; PreToolUse already covers out-of-bounds writes. The Stop hook context is weaker than gate, and forcing no-exit blows through token budgets. See [hooks/stop.md](../hooks/stop.md). Reassess when phase 4 parallel workers show real pathological cases.
+3. **Notification = signal wire**. Events routed to coordinator / notification channels, eliminating empty-cycle polling.
 
-禁令:硬策略不得用 HTTP hook(非 2xx 为非阻塞错误,网络抖动即旁路安全门),一律用 command hook。
+Prohibition: hard policies must not use HTTP hooks (non-2xx is a non-blocking error, network jitter bypasses the security gate); always use command hooks.
 
-## 5. 任务状态机
+## 5. Task State Machine
 
-每个任务的生命周期由如下状态机管理,当前状态与全部迁移历史持久化于 `.harness/harness.db`(`tasks` 与 `transitions` 表),每次迁移以单事务先落库再行动(崩溃后从库读回继续):
-
-```
- QUEUED ──派发──▶ DISPATCHED ──▶ WORKING ──▶ GATING ──全绿──▶ MERGED(终态)
-                                  │  ▲          │
-                  guidance 阻塞    │  │          │ 未过:错误回灌,重试+1
-                                  ▼  │          ▼
-                               BLOCKED ◀──    WORKING(带报错重跑)
-                              (待人工答复)
-                                                │ timeout / 重试耗尽 / 重派耗尽
-                                                ▼
-                                             FAILED(终态,通知协调者)
-```
-
-迁移规则:
-
-- QUEUED→DISPATCHED:编排器原子 claim 队首任务,`git worktree add`,经 adapter 发起首轮调用并登记 session_id。
-- WORKING→GATING:worker 的 status.json 报告 `done`,或其进程正常退出且工作区有 commit。
-- GATING→WORKING(回灌):任一门未过。编排器把失败输出(测试报错、lint、审查意见)拼为后续提示,`--resume` 续接重跑;`retries += 1`,有上限(默认 3)。
-- WORKING→BLOCKED:轮询到 `guidance.json { blocking: true }`。BLOCKED→WORKING:inbox 出现答案文件,resume 续接。
-- 任意态→FAILED:墙钟 timeout 被杀且重派耗尽,或重试上限耗尽。FAILED 必经 Notification 上抛协调者。
-- **死 worker 检测**(图中未画但必须实现):摄取 status.json 时刷新 `sessions.last_seen`;一条 SQL 筛出超阈值(默认 10 分钟)仍 `working` 的任务,判定 worker 已死;退回 QUEUED 重派(优先用 `sessions` 表保留的 session_id 续接,否则新会话 + 从其分支已有 commit 接续)。重派次数独立封顶(默认 2,`tasks.redispatches`)。
-- MERGED:编排器(且只有编排器)串行执行合并,合并后 `git worktree remove` 回收,经 Notification 上抛"待验收"。
-
-## 6. 部署模型与目录布局:工具与项目严格分离
-
-心智模型是 **git**:程序全局安装一份,每个项目只持有自己的状态目录(`.harness/`,类比 `.git/`)。**harness 的代码永远不被复制进任何项目**;项目仓库里只出现声明式内容——AGENTS.md、specs/、hooks 配置(进 git),以及运行时状态 `.harness/`(整体 gitignore)。升级 harness = 在工具目录 git pull,所有项目即刻生效。
-
-文件所有权遵循单写者原则:**任何文件有且只有一个写者**;`harness.db` 为编排器独占写,并发由 SQLite 事务(WAL)保证。
+The lifecycle of each task is managed by the following state machine; current state and full transition history are persisted in `.harness/harness.db` (`tasks` and `transitions` tables); each transition is committed to the database first in a single transaction before action (if crashed, resume from database):
 
 ```
-~/tools/harness/                  # ① 工具本体(装一次,bin/ 进 PATH,永不复制)
+ QUEUED ──dispatch──▶ DISPATCHED ──▶ WORKING ──▶ GATING ──all green──▶ MERGED (terminal)
+                                      │  ▲          │
+                  guidance blocked    │  │          │ failed: error fed back, retries+1
+                                      ▼  │          ▼
+                                   BLOCKED ◀──    WORKING (retry with errors)
+                              (awaiting human reply)
+                                                    │ timeout / retries exhausted / redispatches exhausted
+                                                    ▼
+                                                 FAILED (terminal, notify coordinator)
+```
+
+Transition rules:
+
+- QUEUED→DISPATCHED: Orchestrator atomically claims the head task, `git worktree add`, initiates first call via adapter and registers session_id.
+- WORKING→GATING: Worker's status.json reports `done`, or process exits normally with commits in the worktree.
+- GATING→WORKING (feedback): Any gate fails. Orchestrator concatenates failure output (test errors, lint, review comments) as follow-up prompt, resumes with `--resume`; `retries += 1`, capped (default 3).
+- WORKING→BLOCKED: Polls and finds `guidance.json { blocking: true }`. BLOCKED→WORKING: Answer file appears in inbox, resumes with that session.
+- Any state→FAILED: Wall clock timeout killed and redispatches exhausted, or retries cap exhausted. FAILED must be escalated to coordinator via Notification.
+- **Dead worker detection** (not shown in diagram but must be implemented): Refreshes `sessions.last_seen` when ingesting status.json; a single SQL query identifies tasks with exceeded threshold (default 10 minutes) still `working`; declares worker dead; returns to QUEUED for redispatch (preferring the session_id saved in `sessions` table for resume, otherwise new session + continuing from existing commits on its branch). Redispatch count separately capped (default 2, `tasks.redispatches`).
+- MERGED: Orchestrator (and only orchestrator) serially executes the merge, removes worktree with `git worktree remove` after merge, escalates "pending acceptance" via Notification.
+
+## 6. Deployment Model and Directory Layout: Strict Tool/Project Separation
+
+The mental model is **git**: the program is globally installed once; each project only holds its own state directory (`.harness/`, analogous to `.git/`). **harness code is never copied into any project**; the project repository only contains declarative content — AGENTS.md, specs/, hooks config (in git), plus runtime state `.harness/` (entirely gitignored). Upgrading harness = `git pull` in the tool directory; all projects immediately benefit.
+
+File ownership follows the single-writer principle: **any file has exactly one writer**; `harness.db` is exclusively written by the orchestrator; concurrency is guaranteed by SQLite transactions (WAL).
+
+```
+~/tools/harness/                  # ① Tool itself (install once, bin/ in PATH, never copy)
 ├── bin/
-│   ├── harness-infi              #    入口命令:以协调者配置启动 Claude Code 会话
-│   └── harness                   #    管理/观测命令(status / attach / events / backup …)
-├── orchestrator.sh               #    执行平面入口(7 行 shim,exec 到 Python 主体)
-├── coordinator/                  #    协调者武装:system prompt + 脚本工具
-│   ├── tools/harness-task        #      协调者可调:add / query / answer / cancel / history
-│   └── coordinator.md            #      协调者角色与打扰策略提示
-├── adapters/                     #    claude.sh / codex.sh (opencode 暂未做)
-├── src/harness/                  #    Python 层:碰 SQL / 状态机 / 并发的部分
-│   ├── db.py                     #      SQLite 短连接 + 真参数化
-│   ├── orchestrator.py + worker.py + merge.py   # 并行 worker 池 + 串行合并
+│   ├── harness-infi              #    Entry command: starts Claude Code session with coordinator config
+│   └── harness                   #    Management/observation command (status / attach / events / backup …)
+├── orchestrator.sh               #    Execution plane entry (7-line shim, exec to Python body)
+├── coordinator/                  #    Coordinator arming: system prompt + script tools
+│   ├── tools/harness-task        #      Coordinator callable: add / query / answer / cancel / history
+│   └── coordinator.md            #      Coordinator role and interrupt policy prompt
+├── adapters/                     #    claude.sh / codex.sh (opencode not yet done)
+├── src/harness/                  #    Python layer: parts touching SQL / state machine / concurrency
+│   ├── db.py                     #      SQLite short-connection + true parameterization
+│   ├── orchestrator.py + worker.py + merge.py   # parallel worker pool + serial merge
 │   ├── adapter.py notify.py budget.py config.py atomic_write.py
 │   └── cli/{harness_task,db_cli,orchestrator_cli}.py   # console scripts
-├── lib/                          #    残留 bash:gate.sh + python_env.sh
-└── templates/                    #    AGENTS.md 模板、settings.json 模板、gitignore 片段
+├── lib/                          #    Remaining bash: gate.sh + python_env.sh
+└── templates/                    #    AGENTS.md template, settings.json template, gitignore fragment
 
-~/.config/harness/                # ② 全局配置(每台机器一份)
-├── config                        #    全局日预算、通知渠道凭据
-└── projects.list                 #    已接管项目注册表(全局预算聚合、harness ls)
+~/.config/harness/                # ② Global config (one per machine)
+├── config                        #    Global daily budget, notification channel credentials
+└── projects.list                 #    Registered project registry (global budget aggregation, harness ls)
 
-<project>/                        # ③ 任一被接管的项目(纯净:只有自己的代码)
-├── src/  tests/  Makefile        #    项目自身代码
-├── AGENTS.md                     #    全 agent 共享规约(进 git)
-├── CLAUDE.md → AGENTS.md         #    软链(进 git)
-├── .claude/settings.json         #    hooks(进 git,团队共享安全门)
-├── specs/<task_id>.md            #    任务规格(进 git:AI 做过什么即项目历史)
-└── .harness/                     #    运行时状态(整体 gitignore,删项目即随之消失)
-    ├── harness.db                #    本项目队列/状态机/迁移史/会话/成本账
-    ├── workers/<id>/{status,guidance}.json   # worker 独占写
-    ├── inbox/<id>.answer         #    人/协调者独占写
-    └── logs/raw/                 #    原始调用 JSON 留档
+<project>/                        # ③ Any onboarded project (clean: only its own code)
+├── src/  tests/  Makefile        #    Project's own code
+├── AGENTS.md                     #    Shared contract for all agents (in git)
+├── CLAUDE.md → AGENTS.md         #    Symlink (in git)
+├── .claude/settings.json         #    Hooks (in git, team-shared security gate)
+├── specs/<task_id>.md            #    Task specs (in git: what AI did is project history)
+└── .harness/                     #    Runtime state (entirely gitignored, disappears if project deleted)
+    ├── harness.db                #    This project's queue/state machine/transition history/sessions/cost ledger
+    ├── workers/<id>/{status,guidance}.json   # worker exclusive write
+    ├── inbox/<id>.answer         #    Human/coordinator exclusive write
+    └── logs/raw/                 #    Raw call JSON archive
 
-<project 同级>/.worktrees/<project>/<task_id>/   # ④ worktree 置于项目外兄弟目录
-                                  #    避免嵌入主工作区搅浑 git status
+<project sibling>/.worktrees/<project>/<task_id>/   # ④ worktrees in sibling directory outside project
+                                  #    Avoids embedding in main workspace polluting git status
 ```
 
-全局预算闸由 `bin/harness` 按 `projects.list` 聚合各项目 `calls` 表实现;API 控制台 spend limit 作最后兜底。
+Global budget gate is implemented by `bin/harness` aggregating each project's `calls` table per `projects.list`; API console spend limit as final backstop.
 
-## 7. 工程约束(实现必须遵守)
+## 7. Engineering Constraints (Implementation Must Follow)
 
-### 7.1 进程与会话边界
+### 7.1 Process and Session Boundaries
 
-- 每次执行 agent 调用必须双重上限:外层 `timeout`(墙钟,默认 900s)+ 内层 `--max-turns`(默认 12)。无例外。
-- 会话续接封顶:同一 session 续接达 N 轮(默认 6)或接近上下文窗口,强制 checkpoint(进度写黑板、代码 commit),开新会话从磁盘接续。
-- 每次调用默认视为"可能失败":可能被 timeout 杀、OOM、半途崩。退出码 0 ≠ 任务完成。**真相 = 黑板 + git diff + 校验门,永远不是 CLI 返回值。**
-- 续接 token 成本随轮数增加 30–50%,独立任务优先单次调用而非续接。
+- Every execution agent call must have dual limits: outer `timeout` (wall clock, default 900s) + inner `--max-turns` (default 12). No exceptions.
+- Session resumption cap: when the same session has been resumed N times (default 6) or is approaching the context window, force a checkpoint (write progress to blackboard, commit code), start a new session resuming from disk.
+- Every call is by default treated as "possibly failed": may be killed by timeout, OOM, or crash mid-way. Exit code 0 ≠ task complete. **Truth = blackboard + git diff + gate; never the CLI return value.**
+- Resume token costs increase 30–50% per round; independent tasks should prefer single calls over resumption.
 
-### 7.2 通信契约
+### 7.2 Communication Contract
 
-- 每个后端一个 adapter,把 `json` / `stream-json` / Codex NDJSON 归一化为统一内部结构 `{ok, session_id, result, cost_usd, num_turns, error}`;编排逻辑不接触原生格式。
-- 先检错误字段再用结果:失败调用往往仍是合法 JSON(`.is_error` / `.error`)。
-- **绝不解析模型自然语言输出(`.result`)做控制决策**;机器读的控制信号一律来自指示 agent 写的黑板结构化文件。
-- 提示词一律走 stdin 或文件,禁止把含引号/`$`/反引号/换行的文本内联拼进命令行。
+- One adapter per backend; normalizes `json` / `stream-json` / Codex NDJSON into the unified internal structure `{ok, session_id, result, cost_usd, num_turns, error}`; orchestration logic never touches native formats.
+- Check error fields before using results: failed calls are often still valid JSON (`.is_error` / `.error`).
+- **Never parse model natural language output (`.result`) for control decisions**; machine-readable control signals always come from structured blackboard files written by instructed agents.
+- Prompts always go via stdin or file; never inline text containing quotes/`$`/backticks/newlines into the command line.
 
-### 7.3 状态层并发安全
+### 7.3 State Layer Concurrency Safety
 
-文件层(worker/人写入):
+File layer (worker/human writes):
 
-- 原子写:所有 JSON 写 `*.tmp` 后 `mv` 替换,禁止原地写。
-- 单写者(见第 6 节);所有 schema 带 `schema_version` 读时校验,带 `updated` 时间戳供 stale 检测。
+- Atomic write: all JSON written to `*.tmp` then renamed with `mv`; no in-place writes.
+- Single writer (see §6); all schemas carry `schema_version` validated on read, and `updated` timestamp for stale detection.
 
-SQLite 层(编排器独占写):
+SQLite layer (orchestrator exclusive write):
 
-- 建库 `PRAGMA journal_mode=WAL;`,每次连接 `PRAGMA busy_timeout=5000;`——读不阻塞写,偶发并发自动重试。
-- 数据库文件必须在本地文件系统,**严禁 NFS/网络盘**(WAL 共享内存机制在网络文件系统上不可靠)。
-- 每操作一次 `sqlite3 db "..."` 短连接短事务;禁止长事务。
-- 依赖 `RETURNING`(SQLite ≥ 3.35),启动时校验版本。
-- 备份:`sqlite3 .harness/harness.db ".backup ..."`,随合并节点定期执行。
-- 禁止 agent 直接拼 SQL 写库(转义/注入对 LLM 是高发故障面);agent 只写 JSON 文件,由编排器摄取。协调者经 `harness-task` 脚本(参数化)读写,不直接碰 SQL。
+- Create database with `PRAGMA journal_mode=WAL;`, each connection uses `PRAGMA busy_timeout=5000;` — reads don't block writes; occasional concurrent access automatically retried.
+- Database file must be on local filesystem; **strictly prohibited on NFS/network mounts** (WAL shared memory mechanism is unreliable on network filesystems).
+- One `sqlite3 db "..."` short-connection short-transaction per operation; no long transactions.
+- Depends on `RETURNING` (SQLite ≥ 3.35); validate version at startup.
+- Backup: `sqlite3 .harness/harness.db ".backup ..."`, run periodically at merge checkpoints.
+- Agents must not directly write SQL to the database (escaping/injection is a high-frequency failure mode for LLMs); agents only write JSON files, ingested by the orchestrator. Coordinator reads/writes via `harness-task` script (parameterized); never touches SQL directly.
 
-### 7.4 隔离与合并
+### 7.4 Isolation and Merging
 
-- 一任务一 worktree 一分支;源仓库与主分支对 worker 只读。worktree 置于项目外兄弟目录。
-- 合并是编排器专属职责且严格串行,仅在校验门全绿后执行;worker 禁止 merge / push 主分支。
-- worktree 用毕即 `git worktree remove`;reaper 定期清理孤儿 worktree。
-- 并行任务拆分须无依赖(任务 B 不 import 任务 A 尚未创建的产物),拆分质量由协调者/人在入队前把关。
+- One task, one worktree, one branch; source repo and main branch are read-only to workers. Worktrees are in the sibling directory outside the project.
+- Merging is the orchestrator's exclusive responsibility and strictly serial; only executed after the gate is all-green; workers are prohibited from merging / pushing to main.
+- Worktrees are removed with `git worktree remove` when done; reaper periodically cleans up orphan worktrees.
+- Parallel tasks must have no dependencies (task B does not import artifacts not yet created by task A); split quality is checked by the coordinator/human before enqueueing.
 
-### 7.5 hooks 强制层
+### 7.5 Hooks Enforcement Layer
 
-- PreToolUse 安全门拦截清单(初始):`push --force`、`rm -rf` 于 worktree 外、写 `.harness/` 中非本 worker 目录、读写含 `prod`/`secret` 路径、`git merge`/`git push` 主分支。
-- 拦截输出 stderr + exit 2;常见错误是写 stdout 导致模型收不到反馈。
-- Stop hook 当前不实装(完成度由 gate.sh + 错误回灌覆盖,详见 §4.3 与 hooks/stop.md)。
-- 硬策略只用 command hook,不用 HTTP hook。
+- PreToolUse security gate initial interception list: `push --force`, `rm -rf` outside worktree, writing to `.harness/` directories other than the worker's own, reading/writing paths containing `prod`/`secret`, `git merge`/`git push` to main.
+- Interception output to stderr + exit 2; a common error is writing to stdout causing the model to not receive feedback.
+- Stop hook currently not implemented (completion handled by gate.sh + error feedback; see §4.3 and hooks/stop.md).
+- Hard policies use only command hooks, not HTTP hooks.
 
-### 7.6 成本与可观测
+### 7.6 Cost and Observability
 
-- 每次调用 INSERT 一行 `calls` 表;原始 JSON 另存 `logs/raw/` 排障。
-- 预算闸即 SQL:`SELECT COALESCE(SUM(cost_usd),0) FROM calls WHERE ts >= date('now');` 与日预算比较,超限即 kill switch 停止派发并通知协调者。
-- 对话平面走订阅、执行平面走程序化额度(2026-06-15 起按 API 价单独计费);为执行平面配独立 API key,启用 prompt caching 摊薄反复重发的系统提示/文件上下文。
+- Each call INSERTs one row into the `calls` table; raw JSON archived to `logs/raw/` for debugging.
+- Budget gate is SQL: `SELECT COALESCE(SUM(cost_usd),0) FROM calls WHERE ts >= date('now');` compared to daily budget; when exceeded, kill switch stops dispatching and notifies coordinator.
+- Conversation plane runs on subscription; execution plane runs on programmatic quota (billed separately per API rate card as of 2026-06-15); configure a separate API key for the execution plane, enable prompt caching to amortize system prompts/file context sent repeatedly.
 
-### 7.7 安全基线
+### 7.7 Security Baseline
 
-- 生产凭证与 harness 运行环境物理隔离;agent 可达环境变量白名单化。
-- 主分支保护用服务端规则,不依赖本地 hook;合并入主分支前最后一道始终是确定性 CI。
-- 第三方技能/插件视同陌生 npm 包,运行前审计源码。
-- 自动循环必产生大 diff,传统逐行审查失效;以 pre-commit、属性测试、自动化流水线工程机制兜底。
+- Production credentials physically isolated from harness runtime environment; environment variables accessible to agents are whitelisted.
+- Main branch protection enforced by server-side rules, not relying on local hooks; the final gate before merging to main is always deterministic CI.
+- Third-party skills/plugins treated like unfamiliar npm packages; audit source code before running.
+- Automated loops produce large diffs; traditional line-by-line review becomes ineffective; backstop with engineering mechanisms: pre-commit, property tests, automated pipelines.
 
-## 8. 校验门(gate.sh)规格
+## 8. Validation Gate (gate.sh) Specification
 
-按序执行,任一失败即返回非零并输出结构化失败报告(供回灌):
+Executed in sequence; any failure returns non-zero and outputs a structured failure report (for feedback):
 
-1. **构建/类型检查**(如适用):`tsc --noEmit` / `mypy` / `cargo check`。
-2. **Lint**:项目既有 linter,零容忍新增告警。
-3. **测试**:全量或受影响子集;TDD 风格任务要求 spec 中先列明应通过的测试。
-4. **diff 静态审计**:改动是否越出 spec 声明的文件范围、是否触碰禁区路径。
-5. **跨模型审查**(可配置开关):将 `git diff` 喂给另一后端(Claude 写→Codex 审,反之亦然),审查 agent 输出结构化判定 `{approve: bool, issues: []}`;不批准则 issues 作回灌材料。
+1. **Build/type check** (if applicable): `tsc --noEmit` / `mypy` / `cargo check`.
+2. **Lint**: project's existing linter, zero tolerance for new warnings.
+3. **Tests**: full suite or affected subset; TDD-style tasks require spec to list tests that must pass upfront.
+4. **Diff audit**: whether changes exceed the file scope declared in spec, whether forbidden paths were touched.
+5. **Cross-model review** (configurable toggle): feeds `git diff` to another backend (Claude writes → Codex reviews, and vice versa); review agent outputs structured verdict `{approve: bool, issues: []}`; if not approved, issues become feedback material.
 
-门的输出全部落盘于该任务 worktree 根的 `.gate-report.json`,作为回灌提示与人工抽查依据。
+All gate output is written to `.gate-report.json` at the task's worktree root, as feedback prompt and human spot-check material.
 
-## 9. 渐进落地路线
+## 9. Phased Rollout
 
-- **阶段一(第 1 周)· 入口 + 单 agent + 校验门**:实现 `harness-infi`(以协调者配置启动 Claude Code)与 `harness-task` 脚本工具;orchestrator 仅支持单 backend(Claude)、单 worker;写好 AGENTS.md、gate.sh、hooks 安全门。协调者能把对话中明确的任务入队、dumb loop 执行并过门;人盯每次运行,打磨 spec 写法。验收:连续 5 个真实小任务一次过门率 ≥ 60%。
-- **阶段二(第 2 周)· 闭环与崩溃恢复**:补齐状态机、错误回灌、重试/重派上限、死 worker 检测、Notification 打扰策略。开始"睡前交代、早上验收"。验收:kill -9 编排器后重启可正确续跑(SQLite 事务保证无半截中间态)。
-- **阶段三(第 3 周)· 跨模型审查**:引入 Codex/OpenCode 作裁判(先做审查,不做并行编写——价值更高、风险更低)。
-- **阶段四 · 并行 worktree**:多 worker 并行;前提是任务拆分质量已验证。逐步降低人工介入点。
+- **Phase 1 (week 1) · Entry + single agent + gate**: Implement `harness-infi` (starts Claude Code with coordinator config) and `harness-task` script tool; orchestrator supports single backend (Claude), single worker; write AGENTS.md, gate.sh, hooks security gate. Coordinator can enqueue clearly-defined tasks from conversation; dumb loop executes and passes gate; human watches every run, refining spec writing. Acceptance: 5 consecutive real small tasks with first-pass gate rate ≥ 60%.
+- **Phase 2 (week 2) · Closed loop and crash recovery**: Complete state machine, error feedback, retry/redispatch caps, dead worker detection, Notification interrupt policy. Begin "leave instructions before bed, review in the morning." Acceptance: after `kill -9` orchestrator, restart can correctly resume (SQLite transactions guarantee no half-completed intermediate states).
+- **Phase 3 (week 3) · Cross-model review**: Introduce Codex/OpenCode as judges (review first, not parallel writing — higher value, lower risk).
+- **Phase 4 · Parallel worktrees**: Multiple workers running in parallel; prerequisite is validated task split quality. Gradually reduce human intervention points.
 
-## 10. 使用手册
+## 10. Usage Manual
 
-### 10.1 用户入口与三种交互档位
+### 10.1 User Entry Point and Three Interaction Modes
 
-用户入口固定为 **`harness-infi`**(在项目目录内执行):它在一个 tmux 会话里以协调者配置启动 Claude Code,你的全部交互就是与这个协调者对话。三种"档位"不是三个入口,而是同一个协调者会话的三种使用方式:
+The user entry point is fixed as **`harness-infi`** (run in the project directory): it starts Claude Code in a tmux session with coordinator configuration; all your interaction is with this coordinator. The three "modes" are not three entry points, but three ways of using the same coordinator session:
 
-- **对话档**:你和协调者来回讨论(探索方案、拆解需求、明确验收标准)。这是把"模糊"变"清晰"的地方。
-- **委派档**:讨论清楚后,你让协调者把任务派下去("把这三件事排进队列,夜里跑")。协调者调 `harness-task` 入队,执行平面接管。这是把"清晰"变"代码"的地方。
-- **观测/验收档**:你问协调者"做得怎么样了",它查黑板汇报;任务完成它主动找你验收。
+- **Conversation mode**: You and the coordinator discuss back and forth (exploring approaches, decomposing requirements, clarifying acceptance criteria). This is where "fuzzy" becomes "clear."
+- **Delegation mode**: After discussion, you have the coordinator dispatch the tasks ("queue these three things, run overnight"). Coordinator calls `harness-task` to enqueue; the execution plane takes over. This is where "clear" becomes "code."
+- **Observation/acceptance mode**: You ask the coordinator "how's it going," it queries the blackboard and reports; tasks complete and it proactively finds you for acceptance.
 
-关键:三档共享同一协调者上下文与同一 `.harness/` 账本,衔接无缝——讨论档聊出的方案可直接转委派档入队,session 与决策连续(这正是 v0.2"裸 claude 模式 A"做不到、v0.3 修复的核心)。**你永远不裸跑 `claude`;那会绕过协调者、丢失上下文所有权。**
+Key: all three modes share the same coordinator context and the same `.harness/` ledger; transitions are seamless — plans discussed in conversation mode can directly transition to delegation mode for enqueueing, with session and decisions continuous (this is exactly what v0.2 "bare claude mode A" couldn't do, the core fix in v0.3). **You never bare-run `claude`; that bypasses the coordinator and loses context ownership.**
 
-### 10.2 可观测性(执行平面默认隐藏、随时可查)
+### 10.2 Observability (Execution Plane Hidden by Default, Always Queryable)
 
-协调者与执行 agent 的全过程默认不展示给你。需要了解时,两种粒度:
+The full process of the coordinator and execution agents is not shown to you by default. When you need to know, two granularities:
 
-- **快照式**(默认够用):`harness status` 查 `.harness/harness.db`,一屏给出每个任务状态、各 agent 当前 progress、今日花费。结构化真相,无需你解读屏幕。
-- **现场式**:
-  - `harness attach`(无参):进入协调者 tmux 会话(harness-infi 启动的 window 0)。
-  - `harness attach <worker_id>`(如 `w1`、`w2`):**worker 现场快照** — 阶段四后 worker 是编排器进程内的 Python 线程,不再是独立 tmux pane;此命令输出该 worker 当前 status.json、worktree 路径、若有 blocking guidance 也一并打印、最近一次 adapter 调用摘要。
-  - `harness attach <worker_id> --path`:仅打印 worktree 路径,便于 `cd "$(harness attach w1 --path)"` 进现场看 git 状态。
+- **Snapshot** (usually sufficient): `harness status` queries `.harness/harness.db`, giving each task's status, each agent's current progress, and today's spending on one screen. Structured truth; no screen-reading required.
+- **Live view**:
+  - `harness attach` (no argument): enter the coordinator tmux session (window 0 started by harness-infi).
+  - `harness attach <worker_id>` (e.g. `w1`, `w2`): **worker live snapshot** — after phase 4, workers are Python threads inside the orchestrator process, no longer independent tmux panes; this command outputs that worker's current status.json, worktree path, any blocking guidance if present, and a summary of the most recent adapter call.
+  - `harness attach <worker_id> --path`: prints only the worktree path, useful for `cd "$(harness attach w1 --path)"` to enter the live scene.
 
-### 10.3 一次性环境搭建(每台机器)
+### 10.3 One-Time Environment Setup (Per Machine)
 
-安装并认证各 backend CLI(claude / codex / opencode,OpenCode 按需配第三方 provider);将 harness 工具本体克隆至 `~/tools/harness/`,`bin/` 加入 PATH(**不复制进任何项目**);`harness setup` 校验依赖(sqlite3 ≥ 3.35、jq、git、tmux)并创建 `~/.config/harness/`;`harness doctor` 对每个 backend 做 echo 级自检,确认 adapter 链路全通。
+Install and authenticate each backend CLI (claude / codex / opencode; OpenCode configured with third-party providers as needed); clone the harness tool to `~/tools/harness/`, add `bin/` to PATH (**never copy into any project**); `harness setup` validates dependencies (sqlite3 ≥ 3.35, jq, git, tmux) and creates `~/.config/harness/`; `harness doctor` does an echo-level self-check for each backend to confirm the full adapter chain works.
 
-### 10.4 新项目初始化(bootstrap,有人陪跑)
+### 10.4 New Project Initialization (Bootstrap, With Human Supervision)
 
-空仓库没有测试与 lint,校验门无门可校,**项目必须先获得"可校验性"才允许进入自动循环**(原则六的使用侧推论)。流程:
+An empty repo has no tests and lint; the gate has nothing to check; **a project must first achieve "verifiability" before entering the automated loop** (the usage-side corollary of Principle 6). Process:
 
-1. `cd <project> && harness init`:生成 AGENTS.md 模板(含验收命令)、软链 CLAUDE.md、安装 hooks、创建 `.harness/`(初始化本项目 harness.db)与 `specs/`、追加 gitignore 条目、登记入 `projects.list`。
-2. `harness-infi` 启动协调者,在对话档里让它搭脚手架:项目骨架、测试框架、linter、`make test`/`make lint` 等 gate 标准命令;人在场补全 AGENTS.md。
-3. `lib/gate.sh` 跑通(至少一个冒烟测试全绿)后,项目方可进入委派档自动循环。
+1. `cd <project> && harness init`: generates AGENTS.md template (with acceptance commands), symlinks CLAUDE.md, installs hooks, creates `.harness/` (initializes this project's harness.db) and `specs/`, appends gitignore entries, registers in `projects.list`.
+2. `harness-infi` starts coordinator; in conversation mode, have it scaffold: project skeleton, test framework, linter, `make test`/`make lint` etc. as gate standard commands; human completes AGENTS.md in person.
+3. After `lib/gate.sh` passes (at least one smoke test all green), the project may enter delegation mode automated loop.
 
-### 10.5 日常一日(典型)
+### 10.5 A Typical Day
 
-`cd <project> && harness-infi` 启动协调者 → 对话档说清今天要做的几件事 → 协调者拆解、确认验收标准后入队(委派档)→ 你去忙别的;协调者只在需决策/待验收/故障时找你 → 收到决策请求时直接在对话里答复,协调者转交执行平面续接 → 任务完成它来找你验收,你 `harness status` 看快照、抽查 diff 与 `.gate-report.json`。日常质量杠杆在 spec 的可校验性,不在编排参数。
+`cd <project> && harness-infi` starts coordinator → in conversation mode, lay out the day's tasks → coordinator decomposes and confirms acceptance criteria, then enqueues (delegation mode) → you go do other things; coordinator only finds you for decision/acceptance/failure → when a decision request arrives, reply directly in the conversation, coordinator passes it to the execution plane to resume → when a task completes, it finds you for acceptance; you run `harness status` for a snapshot and spot-check diff and `.gate-report.json`. Daily quality leverage is in spec verifiability, not orchestration parameters.
 
-### 10.6 新模型与新 CLI 的接入(两条轴,勿混淆)
+### 10.6 Adding New Models and CLIs (Two Axes, Don't Confuse)
 
-**新模型(DeepSeek、Kimi 等)≠ 新 CLI。** 此类模型主流形态是经 OpenAI/Anthropic 兼容端点挂入现有多 provider CLI(首选 OpenCode:provider 配置加 baseURL + key + 模型名),harness 与 adapter 零改动,任务 spec 中以 `backend: opencode, model: <name>` 指定。数据边界须评估:第三方/境外模型默认只用于开源与数据分级允许的仓库,允许的 backend/model 白名单写入各项目 AGENTS.md 并由 gate 强制。
+**New models (DeepSeek, Kimi, etc.) ≠ new CLI.** Such models primarily connect to existing multi-provider CLIs via OpenAI/Anthropic-compatible endpoints (preferred: OpenCode with provider config adding baseURL + key + model name); **harness and adapter need zero changes**; specify `backend: opencode, model: <name>` in the task spec. Data boundaries must be evaluated: third-party/offshore models are by default only used for open-source and data-classification-permitted repos; the allowed backend/model whitelist is written in each project's AGENTS.md and enforced by gate.
 
-**新 CLI(独立工具)走 adapter 接入合同**,逐项验证:
+**New CLI (standalone tool) goes through the adapter onboarding contract** — verify each item:
 
-| # | 能力 | 验证方式 | 缺失时降级 |
-|---|------|----------|------------|
-| 1 | 非交互模式(硬门槛) | 无 TTY 下管道调用能完成并退出 | 无降级,不接 |
-| 2 | 退出码语义(硬门槛) | 成功 0 / 失败非零 | 输出判断成败,慎接 |
-| 3 | 可解析输出(硬门槛) | --json 单对象或 NDJSON | 正则提取,标记低可信,仅派低风险任务 |
-| 4 | 会话续接 | --resume/--session/--last;ID 可程序化获取 | 仅单发任务;BLOCKED 后重发完整上下文 |
-| 5 | 工具权限控制 | allowlist/沙箱/审批模式 | 仅靠 worktree 隔离 + gate 兜底,禁触敏感仓库 |
-| 6 | 成本数据 | 输出含 cost/usage | calls 表记 NULL,预算闸按次数估算 |
+| # | Capability | Verification | Degradation if missing |
+|---|-----------|-------------|----------------------|
+| 1 | Non-interactive mode (hard requirement) | Pipe call without TTY completes and exits | No degradation — not onboarded |
+| 2 | Exit code semantics (hard requirement) | Success 0 / failure non-zero | Determine success/failure from output; use with caution |
+| 3 | Parseable output (hard requirement) | `--json` single object or NDJSON | Regex extraction, marked low-confidence; dispatch low-risk tasks only |
+| 4 | Session resumption | `--resume/--session/--last`; ID obtainable programmatically | Single-shot tasks only; full context resent after BLOCKED |
+| 5 | Tool permission control | allowlist/sandbox/approval mode | Rely only on worktree isolation + gate backstop; **no sensitive repos** |
+| 6 | Cost data | Output contains cost/usage | `calls.cost_usd` written as NULL; budget gate estimates by call count |
 
-合同本质:adapter 必须归一化为 `{ok, session_id, result, cost_usd, num_turns, error}`,缺失字段在 backend 能力位图中声明,编排器据此限制可派任务类型。注意:此合同针对**执行平面**的后端;对话平面的协调者引擎当前固定为 Claude Code(也可替换为任何具备良好交互式会话的引擎,但需单独适配,不走此表)。
+Contract essence: adapter must normalize to `{ok, session_id, result, cost_usd, num_turns, error}`; missing fields declared in backend capability bitmap; orchestrator restricts dispatchable task types accordingly. Note: this contract is for **execution plane** backends; the conversation plane coordinator engine is currently fixed as Claude Code (can also be replaced with any engine with good interactive session capabilities, but requires separate adaptation, not covered by this table).
 
-## 11. 已知风险与权衡备忘
+## 11. Known Risks and Trade-off Notes
 
-- **协调者引擎绑定**:对话平面当前选 Claude Code 作协调者引擎(取其交互体验与自主编码能力);更换协调者引擎的成本高于更换执行 backend,属架构级决策。
-- **协调者可靠性**:协调者是 LLM,其"判断"可能出错(派错任务、误判完成)。对冲:真正的 go/no-go 始终由确定性校验门把关,协调者无权绕过 gate 合并;协调者的入队动作受 spec 模板与 AGENTS 白名单约束。
-- Codex session ID 不可程序化获取 → 强制 per-worktree 串行,牺牲部分并行换确定性;上游若增 `--session-id` 可解除。
-- OpenCode 服务端模式有子 agent 挂死的已知问题 → 选 `opencode run` CLI 路径绕开;若改用 serve/SDK 须先验证已修复。
-- 会话 resume 是上下文重建而非内存快照,长会话恢复有延迟与走形风险 → 续接封顶 + checkpoint 落盘对冲,不可省略。
-- 全 bash 复杂度天花板:状态机与 adapter 超过 ~500 行后,考虑 orchestrator 主体迁 Python(保持文件协议与 harness.db schema 不变,对 agent 透明;Python 标准库自带 sqlite3,迁移成本低)。
-- SQLite 牺牲状态直接可读性(不能 cat)→ `harness status` 输出当前队列/任务/成本快照弥补;原始调用 JSON 留档 `logs/raw/`。
-- 单机限制:tmux 与文件/SQLite 黑板均不跨机;需多机时引入对象存储黑板或任务分发服务,属架构升级,当前明确不做。
+- **Coordinator engine binding**: The conversation plane currently selects Claude Code as the coordinator engine (for its interactive experience and autonomous coding capabilities); replacing the coordinator engine costs more than replacing an execution backend — this is an architecture-level decision.
+- **Coordinator reliability**: The coordinator is an LLM; its "judgment" may be wrong (dispatching wrong tasks, misjudging completion). Mitigation: the real go/no-go is always gated by deterministic gates; the coordinator has no authority to bypass gate and merge; coordinator enqueue actions are constrained by spec templates and AGENTS whitelist.
+- Codex session ID not obtainable programmatically → forces per-worktree serialization, sacrificing some parallelism for determinism; can be resolved upstream if `--session-id` is added.
+- OpenCode server mode has a known issue with sub-agent hangs → use the `opencode run` CLI path to avoid it; if switching to serve/SDK, verify the fix first.
+- Session resume is context reconstruction, not memory snapshot; long-session recovery has latency and drift risk → resumption cap + checkpoint to disk as mitigation; cannot be omitted.
+- Full-bash complexity ceiling: when state machine and adapter exceed ~500 lines, consider migrating orchestrator body to Python (keeping file protocol and harness.db schema unchanged, transparent to agents; Python standard library includes sqlite3; migration cost is low).
+- SQLite sacrifices direct state readability (can't `cat`) → `harness status` output of current queue/task/cost snapshot compensates; raw call JSON archived to `logs/raw/`.
+- Single-machine limitation: tmux and file/SQLite blackboard don't span machines; introducing multi-machine requires object storage blackboard or task distribution service, an architecture upgrade; explicitly not done currently.
 
-## 12. 附录:字段与约定
+## 12. Appendix: Fields and Conventions
 
-status / guidance / calls 等 schema 见 4.2;时间戳一律 UTC ISO-8601;JSON 文件 UTF-8 无 BOM;`schema_version` 当前为 1,不向后兼容的变更须递增并在 adapter / 编排器 / 协调者工具三端同步。
+Status / guidance / calls schemas see §4.2; all timestamps are UTC ISO-8601; JSON files are UTF-8 without BOM; `schema_version` is currently 1; non-backward-compatible changes must increment the version and synchronize across all three ends: adapter / orchestrator / coordinator tools.

@@ -1,119 +1,119 @@
-# 开发计划
+# Development Plan
 
-## 0. 节奏与原则
+## 0. Pace and Principles
 
-- **不越级**：每阶段先做完、跑通、有验收信号再进下一阶段。
-- **底层先行**：每阶段内部按 `schema → lib → adapter → orchestrator → bin → templates → 集成测试` 顺序。
-- **可校验性是入门票**：任何在项目内运行的功能，必须先有对应的 gate 检查 — 不允许「先实现、后补测试」。
-- **真实任务驱动**：每阶段都用一个具体小项目跑通验收，不堆功能不试用。
+- **No skipping phases**: Complete each phase, get it running, and have an acceptance signal before moving to the next.
+- **Bottom layer first**: Within each phase, follow the order `schema → lib → adapter → orchestrator → bin → templates → integration tests`.
+- **Verifiability is the admission ticket**: Any feature running inside a project must have a corresponding gate check first — "implement first, add tests later" is not allowed.
+- **Driven by real tasks**: Each phase gets validated by running a concrete small project; no stacking features without real use.
 
-## 1. 阶段一：单 backend 闭环（第 1 周）
+## 1. Phase 1: Single Backend Closed Loop (Week 1)
 
-**目标**：协调者 → 入队 → 单 worker（Claude）→ 校验门 → 合并，全链路打通。手工盯每一步。
+**Goal**: Coordinator → enqueue → single worker (Claude) → validation gate → merge; full pipeline end-to-end. Human watches every step.
 
-### 1.1 交付物（按依赖顺序）
+### 1.1 Deliverables (in dependency order)
 
-| 序 | 模块 | 文件 | 交付定义 |
-|----|------|------|---------|
-| 1 | 数据契约 | `schema/harness.sql`, `schema/json/*.json` | DDL 可建库；JSON schema 可被 jq 校验 |
-| 2 | DB 封装 | `lib/db.sh` | `db_init / db_claim / db_transition / db_log_call` 五个函数 + 单元测试 |
-| 3 | 文件写入 | `lib/atomic_write.sh` | `atomic_write_json` 函数，崩溃测试通过 |
-| 4 | 日志 | `lib/log.sh` | 调用 JSON 落盘 `logs/raw/` |
-| 5 | Claude adapter | `adapters/claude.sh` | 输入提示词文件 → 输出统一结构 `{ok, session_id, result, cost_usd, num_turns, error}` |
-| 6 | 校验门 | `lib/gate.sh` | 五步骤按序，任一失败输出 `.gate-report.json` |
-| 7 | hooks（安全门最小集） | `hooks/pre_tool_use.sh`, `hooks/stop.sh` | 拦截 `push --force`、worktree 外 `rm -rf`、未过门 stop |
-| 8 | 编排器 | `orchestrator.sh` | 单 worker 串行循环：claim → worktree → adapter → gate → merge → reap |
-| 9 | 协调者武装 | `coordinator/coordinator.md`, `coordinator/tools/harness-task` | system prompt 写好打扰策略；harness-task add/query 可用 |
-| 10 | 入口 | `bin/harness-infi`, `bin/harness` | infi 起协调者会话；harness 支持 setup/doctor/init/status |
-| 11 | 模板 | `templates/AGENTS.md.tmpl`, `templates/settings.json.tmpl`, `templates/gitignore-fragment` | `harness init` 渲染到项目 |
+| # | Module | Files | Definition of Done |
+|----|--------|-------|-------------------|
+| 1 | Data contracts | `schema/harness.sql`, `schema/json/*.json` | DDL can create database; JSON schema can be validated with jq |
+| 2 | DB wrapper | `lib/db.sh` | `db_init / db_claim / db_transition / db_log_call` five functions + unit tests |
+| 3 | File writes | `lib/atomic_write.sh` | `atomic_write_json` function; crash test passes |
+| 4 | Logging | `lib/log.sh` | Call JSON written to `logs/raw/` |
+| 5 | Claude adapter | `adapters/claude.sh` | Input prompt file → output unified structure `{ok, session_id, result, cost_usd, num_turns, error}` |
+| 6 | Validation gate | `lib/gate.sh` | Five steps in sequence; any failure outputs `.gate-report.json` |
+| 7 | Hooks (minimal security gate) | `hooks/pre_tool_use.sh`, `hooks/stop.sh` | Intercepts `push --force`, `rm -rf` outside worktree, stop without passing gate |
+| 8 | Orchestrator | `orchestrator.sh` | Single worker serial loop: claim → worktree → adapter → gate → merge → reap |
+| 9 | Coordinator arming | `coordinator/coordinator.md`, `coordinator/tools/harness-task` | System prompt with interrupt policy written; harness-task add/query functional |
+| 10 | Entry points | `bin/harness-infi`, `bin/harness` | infi starts coordinator session; harness supports setup/doctor/init/status |
+| 11 | Templates | `templates/AGENTS.md.tmpl`, `templates/settings.json.tmpl`, `templates/gitignore-fragment` | Rendered to project by `harness init` |
 
-**阶段一不做**：Codex / OpenCode adapter、跨模型审查、并行 worker、死 worker 检测、Notification 路由、预算闸自动 kill（手算即可）。
+**Phase 1 deferred**: Codex / OpenCode adapter, cross-model review, parallel workers, dead worker detection, Notification routing, automated budget kill switch (manual calculation suffices).
 
-### 1.2 验收
+### 1.2 Acceptance
 
-- 真实项目（推荐：一个有 `make test` 的小型 TypeScript 或 Python 库）连续派 5 个小任务（如「为模块 X 添加单元测试」「修复 issue Y」），**一次过门率 ≥ 60%**。
-- 任意时刻 `harness status` 输出当前队列与每个任务状态，与磁盘真相一致。
-- 手动 `kill -9 orchestrator.sh` 后重启，正在 GATING 的任务可继续；正在 WORKING 的可被死 worker 检测识别（阶段二接管，阶段一手工重启即可）。
+- A real project (recommended: a small TypeScript or Python library with `make test`) runs 5 small tasks in sequence (e.g. "add unit tests for module X", "fix issue Y"), with **first-pass gate rate ≥ 60%**.
+- `harness status` at any moment outputs the current queue and each task's state, consistent with the disk state.
+- After manually `kill -9 orchestrator.sh` and restarting, a task in GATING can continue; a task in WORKING can be identified by dead worker detection (phase 2 takes over; manual restart suffices for phase 1).
 
-## 2. 阶段二：闭环与崩溃恢复（第 2 周）
+## 2. Phase 2: Closed Loop and Crash Recovery (Week 2)
 
-**目标**：「睡前交代、早上验收」可用 — 系统能无人值守跑过夜，崩溃自愈，需要时打扰。
+**Goal**: "Leave instructions before bed, review in the morning" is usable — the system can run unattended overnight, self-heal from crashes, and interrupt when needed.
 
-### 2.1 交付物
+### 2.1 Deliverables
 
-| 序 | 模块 | 交付定义 |
-|----|------|---------|
-| 1 | 状态机迁移历史 | `transitions` 表写入 + `harness status --history T-XXX` 查询 |
-| 2 | 错误回灌 | gate 失败 → adapter `--resume` 续接，注入 `.gate-report.json` 为 prompt；`retries++`，封顶默认 3 |
-| 3 | 死 worker 检测 | 摄取 status.json 时刷新 `sessions.last_seen`；超阈值（默认 10 分钟）扫描器退回 QUEUED；`redispatches++` 封顶默认 2 |
-| 4 | guidance 升级 | worker 写 `guidance.json {blocking: true}` → 编排器置 BLOCKED → 经 notify 上抛 |
-| 5 | 通知路由 | `lib/notify.sh` + `hooks/notification.sh` 三类事件路由：需决策 / 待验收 / 故障 |
-| 6 | 预算闸 | `lib/budget.sh`：日预算 SQL 累加，超限触发 kill switch + Notification |
-| 7 | 备份 | `harness backup` 调 `sqlite3 .backup`，挂在合并节点 |
+| # | Module | Definition of Done |
+|----|--------|-------------------|
+| 1 | State machine transition history | `transitions` table writes + `harness status --history T-XXX` query |
+| 2 | Error feedback | Gate failure → adapter `--resume` continuation, `.gate-report.json` injected as prompt; `retries++`, default cap of 3 |
+| 3 | Dead worker detection | Refresh `sessions.last_seen` when ingesting status.json; scanner returns tasks to QUEUED after threshold exceeded (default 10 minutes); `redispatches++` capped at default 2 |
+| 4 | Guidance escalation | Worker writes `guidance.json {blocking: true}` → orchestrator sets BLOCKED → escalated via notify |
+| 5 | Notification routing | `lib/notify.sh` + `hooks/notification.sh` three event types: needs decision / pending acceptance / failure |
+| 6 | Budget gate | `lib/budget.sh`: daily budget SQL accumulation; when exceeded, triggers kill switch + Notification |
+| 7 | Backup | `harness backup` calls `sqlite3 .backup`, hooked at merge points |
 
-### 2.2 验收
+### 2.2 Acceptance
 
-- 提交 8 个任务后离场 8 小时，回来 ≥ 5 个 MERGED、≤ 1 个 BLOCKED 经询问已答复、≤ 2 个 FAILED 报告原因清晰。
-- `kill -9` orchestrator + 全部 worker 进程，重启后所有任务从正确状态继续，**无任何任务停留在「半截中间态」**（DISPATCHED 但无 worker / GATING 但无报告）。
-- 模拟 API 故障让一个任务 timeout → 应自动重派一次 → 仍失败 → FAILED 并上抛。
+- Submit 8 tasks and leave for 8 hours; returning to ≥ 5 MERGED, ≤ 1 BLOCKED that has been answered after notification, ≤ 2 FAILED with clear reason reports.
+- `kill -9` orchestrator + all worker processes; after restarting, all tasks continue from correct state with **no task stuck in a "half-completed intermediate state"** (DISPATCHED with no worker / GATING with no report).
+- Simulate API failure causing one task to timeout → should automatically redispatch once → still fails → FAILED and escalated.
 
-## 3. 阶段三：跨模型审查（第 3 周）
+## 3. Phase 3: Cross-Model Review (Week 3)
 
-**目标**：引入 Codex / OpenCode 作为**裁判**（不做并行编写），借跨模型对抗提升合并质量。
+**Goal**: Introduce Codex / OpenCode as **judges** (not parallel writers), improving merge quality through cross-model adversarial review.
 
-### 3.1 交付物
+### 3.1 Deliverables
 
-| 序 | 模块 | 交付定义 |
-|----|------|---------|
-| 1 | Codex adapter | `adapters/codex.sh`，遵守 per-worktree 串行约束 |
+| # | Module | Definition of Done |
+|----|--------|-------------------|
+| 1 | Codex adapter | `adapters/codex.sh`, respecting per-worktree serial constraints |
 | 2 | OpenCode adapter | `adapters/opencode.sh` |
-| 3 | gate 第 5 步：跨模型审查 | 把 `git diff` 喂给另一 backend，输出 `{approve: bool, issues: []}` |
-| 4 | 配置开关 | `AGENTS.md` 中 `gate.cross_review.reviewer: codex | opencode | none` |
-| 5 | adapter doctor 增强 | `harness doctor` 对每个 backend 做 echo 自检 |
+| 3 | Gate step 5: cross-model review | Feed `git diff` to another backend, output `{approve: bool, issues: []}` |
+| 4 | Configuration toggle | `AGENTS.md` gate.cross_review.reviewer: `codex | opencode | none` |
+| 5 | Adapter doctor enhancement | `harness doctor` echo self-check for each backend |
 
-### 3.2 验收
+### 3.2 Acceptance
 
-- 故意制造 3 个有 subtle bug 的 diff（如越界访问、空指针、错误的 SQL 转义），**跨模型审查识别率 ≥ 2/3**。
-- adapter 合同表（见 `adapter-contract.md`）所有硬门槛全部满足。
+- Deliberately create 3 diffs with subtle bugs (e.g. out-of-bounds access, null pointer, wrong SQL escaping); **cross-model review detection rate ≥ 2/3**.
+- All hard requirements in the adapter contract table (see `adapter-contract.md`) are satisfied.
 
-## 4. 阶段四：并行 worktree（第 4 周起）
+## 4. Phase 4: Parallel Worktrees (Week 4+)
 
-**目标**：多 worker 并行执行无依赖任务，吞吐量上去。
+**Goal**: Multiple workers execute independent tasks in parallel; throughput improves.
 
-### 4.1 前置条件
+### 4.1 Prerequisites
 
-- 阶段二崩溃恢复已经稳定跑过至少两周。
-- 任务拆分质量经协调者自检：spec 模板增加「依赖检查」字段，协调者入队前回答「本任务是否依赖当前队列中任何任务的产物」。
+- Phase 2 crash recovery has been stable for at least two weeks.
+- Task split quality validated by coordinator self-check: spec template adds a "dependency check" field; coordinator answers "does this task depend on the output of any task currently in the queue" before enqueueing.
 
-### 4.2 交付物
+### 4.2 Deliverables
 
-- 编排器主循环改并发：worker 池 + claim 串行（SQL `RETURNING` 即原子）+ 调度并行。
-- 合并仍**严格串行**（编排器主线程独占）。
-- `harness attach <worker>` 选择 pane。
-- 资源闸：max concurrent workers、单任务 token / 时间硬上限。
+- Orchestrator main loop goes concurrent: worker pool + serial claim (SQL `RETURNING` is atomic) + parallel dispatch.
+- Merging remains **strictly serial** (orchestrator main thread exclusive).
+- `harness attach <worker>` selects pane.
+- Resource gates: max concurrent workers, per-task token / time hard limits.
 
-### 4.3 验收
+### 4.3 Acceptance
 
-- 8 个独立任务并行跑，吞吐量 ≥ 串行的 3 倍。
-- 合并阶段无 race（同时两个完成 → 第二个等待）。
-- 任意 worker 崩溃不污染其他 worker 的 worktree。
+- 8 independent tasks run in parallel; throughput ≥ 3x serial.
+- No race in merge phase (two complete simultaneously → second waits).
+- Any worker crash does not contaminate other workers' worktrees.
 
-## 5. 不在路线图（明确不做）
+## 5. Not on the Roadmap (Explicitly Will Not Do)
 
-- 跨机器分布式。
-- 对等 agent 网络（A2A）。
-- Web UI。
-- 多租户。
-- 替换 SQLite 为外部数据库。
+- Cross-machine distributed.
+- Peer agent networks (A2A).
+- Web UI.
+- Multi-tenancy.
+- Replacing SQLite with an external database.
 
-需求出现前不做（设计 §1 非目标）。
+Not built until requirements emerge (design §1 non-goals).
 
-## 6. 风险与缓解（开发期）
+## 6. Risks and Mitigations (Development Phase)
 
-| 风险 | 触发条件 | 缓解 |
-|------|---------|------|
-| bash 复杂度爆炸 | 状态机/adapter 超 500 行 | 阶段三末评估迁 Python（保持文件协议与 schema 不变，对 agent 透明）|
-| Codex session 不可控 | per-worktree 仍出现并发 | adapter 内加 flock 强制串行 |
-| OpenCode 子 agent 挂死 | serve 模式 | 只用 `opencode run` CLI 路径 |
-| 长 session 走形 | resume 超 6 轮 | checkpoint 落盘 + 开新会话（阶段一即实现该上限） |
-| schema 改动遗漏同步 | 三端不一致 | schema 改 PR 必须同时 touch adapter / 编排器 / harness-task 三处 |
+| Risk | Trigger | Mitigation |
+|------|---------|-----------|
+| Bash complexity explosion | State machine/adapter exceeds 500 lines | Evaluate migration to Python at end of phase 3 (keeping file protocol and schema unchanged, transparent to agents) |
+| Codex session out of control | Per-worktree serialization still shows concurrency | Add flock inside adapter to force serialization |
+| OpenCode sub-agent hang | serve mode | Use only `opencode run` CLI path |
+| Long session drift | Resume exceeds 6 rounds | Checkpoint to disk + open new session (implement this cap in phase 1) |
+| Schema change sync miss | Three ends inconsistent | Schema change PRs must simultaneously touch adapter / orchestrator / harness-task in all three places |

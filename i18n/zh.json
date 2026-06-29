@@ -1,0 +1,9 @@
+{
+  "worker.gate_retry_prompt": "上一次提交未通过校验门，需修复后重新提交：\n\n{steps}\n\n请只修复上述问题，不要扩大改动范围。完成后再次 git add & git commit。\n",
+  "worker.initial_spec_header": "=== TASK SPEC ===",
+  "worker.initial_instructions": "=== INSTRUCTIONS ===\n请基于上述 spec 在当前目录完成任务。完成后必须 git add & git commit。\n禁止 push、merge 主分支，禁止离开本工作目录。\n",
+  "worker.resume_header": "=== RESUME — 用户/协调者已答复 ===",
+  "worker.resume_previous_question": "上一次提问：{question}",
+  "worker.resume_decision": "决策：{answer}",
+  "worker.resume_instructions": "请基于此决策继续完成任务。完成后必须 git add & git commit。\n禁止 push、merge 主分支，禁止离开本工作目录。"
+}

@@ -1,82 +1,82 @@
-# 模块架构
+# Module Architecture
 
-## 1. 目录结构（最终态）
+## 1. Directory Structure (Final State)
 
 ```
-~/tools/harness/                        # 工具本体仓库（即本仓库）
+~/tools/harness/                        # tool repository (this repo)
 │
-├── README.md                           # 项目入口
-├── CLAUDE.md                           # Claude 开发速查（含语言边界硬约束 §8.1）
-├── docs/                               # 设计与开发文档（本目录）
-├── pyproject.toml                      # Python 包定义（console scripts: harness-task / harness-db）
-├── uv.lock                             # uv 锁文件（进 git；用 `uv sync` 重建 .venv）
+├── README.md                           # project entry point
+├── CLAUDE.md                           # Claude development quick reference (includes language boundary hard constraints §8.1)
+├── docs/                               # design and development documentation (this directory)
+├── pyproject.toml                      # Python package definition (console scripts: harness-task / harness-db)
+├── uv.lock                             # uv lock file (in git; use `uv sync` to rebuild .venv)
 │
-├── bin/                                # 用户/系统可执行入口（PATH 暴露）
-│   ├── harness-infi                    # 启动协调者会话（用户唯一入口）
-│   └── harness                         # bash 入口：init/status/run-once；DB 操作经 harness-db CLI
+├── bin/                                # user/system executable entry points (exposed in PATH)
+│   ├── harness-infi                    # start coordinator session (sole user entry point)
+│   └── harness                         # bash entry: init/status/run-once; DB operations via harness-db CLI
 │
-├── orchestrator.sh                     # 7 行 shim：exec python -m harness.cli.orchestrator_cli（保留以兼容 bin/harness run-once / harness-infi 入口）
+├── orchestrator.sh                     # 7-line shim: exec python -m harness.cli.orchestrator_cli (kept for compatibility with bin/harness run-once / harness-infi entry)
 │
-├── src/harness/                        # Python 层（碰 SQL / 状态机 / 并发的部分）
+├── src/harness/                        # Python layer (parts touching SQL / state machine / concurrency)
 │   ├── __init__.py
-│   ├── db.py                           # SQLite 短连接封装、真参数化（BEGIN IMMEDIATE 写事务）
-│   ├── orchestrator.py                 # 阶段四 — 并行 worker 池 + 串行 merge consumer
-│   ├── worker.py                       # WorkerThread：单任务全周期（adapter → gate → 重试 → 入 merge 队列）
-│   ├── merge.py                        # MergeRequest + drain_queue（主线程串行 git merge）
-│   ├── adapter.py                      # subprocess 封装：调 adapters/<backend>.sh
-│   ├── notify.py                       # events 表 + JSON 文件 + hooks/notification.sh（端口自 lib/notify.sh）
-│   ├── budget.py                       # 预算闸（端口自 lib/budget.sh）
-│   ├── atomic_write.py                 # JSON / text 原子写（端口自 lib/atomic_write.sh）
-│   ├── config.py                       # 读 ~/.config/harness/config
+│   ├── db.py                           # SQLite short-connection wrapper, true parameterization (BEGIN IMMEDIATE write transactions)
+│   ├── orchestrator.py                 # phase 4 — parallel worker pool + serial merge consumer
+│   ├── worker.py                       # WorkerThread: full single-task lifecycle (adapter → gate → retry → merge queue)
+│   ├── merge.py                        # MergeRequest + drain_queue (main thread serial git merge)
+│   ├── adapter.py                      # subprocess wrapper: calls adapters/<backend>.sh
+│   ├── notify.py                       # events table + JSON files + hooks/notification.sh (ported from lib/notify.sh)
+│   ├── budget.py                       # budget gate (ported from lib/budget.sh)
+│   ├── atomic_write.py                 # JSON / text atomic write (ported from lib/atomic_write.sh)
+│   ├── config.py                       # reads ~/.config/harness/config
 │   └── cli/
-│       ├── harness_task.py             # 协调者工具实现
-│       ├── db_cli.py                   # bash 调用桥（harness-db <subcmd>）
+│       ├── harness_task.py             # coordinator tool implementation
+│       ├── db_cli.py                   # bash bridge (harness-db <subcmd>)
 │       └── orchestrator_cli.py         # console script: harness-orchestrator
 │
-├── coordinator/                        # 协调者武装包
-│   ├── coordinator.md                  # 协调者 system prompt / 打扰策略（自然语言定义）
+├── coordinator/                        # coordinator arming package
+│   ├── coordinator.md                  # coordinator system prompt / interrupt policy (natural language definition)
 │   └── tools/
-│       └── harness-task                # 薄 shim：exec python3 -m harness.cli.harness_task
+│       └── harness-task                # thin shim: exec python3 -m harness.cli.harness_task
 │
-├── adapters/                           # backend 归一化层（bash）
+├── adapters/                           # backend normalization layer (bash)
 │   ├── claude.sh
-│   └── codex.sh                        # opencode 暂未做
+│   └── codex.sh                        # opencode not yet done
 │
-├── lib/                                # 残留 bash 函数库（gate 仍在 bash；其余已迁 Python）
-│   ├── gate.sh                         # 校验门多步骤执行（含 cross_review）
-│   └── python_env.sh                   # bash → python 桥：设 $HARNESS_PYTHON + PYTHONPATH
+├── lib/                                # remaining bash function library (gate still in bash; rest migrated to Python)
+│   ├── gate.sh                         # validation gate multi-step execution (includes cross_review)
+│   └── python_env.sh                   # bash → python bridge: sets $HARNESS_PYTHON + PYTHONPATH
 │
-├── hooks/                              # 安装到项目 .claude/settings.json 的钩子脚本
-│   ├── pre_tool_use.sh                 # 危险命令拦截（stderr + exit 2）
-│   └── notification.sh                 # 事件桌面通知 + notify.log
+├── hooks/                              # hook scripts installed to project .claude/settings.json
+│   ├── pre_tool_use.sh                 # dangerous command interception (stderr + exit 2)
+│   └── notification.sh                 # event desktop notification + notify.log
 │
-├── templates/                          # harness init 时拷贝/渲染到项目
-│   ├── AGENTS.md.tmpl                  # 含 gate 块 + cross_review_reviewer
-│   ├── settings.json.tmpl              # .claude/settings.json hooks 注册
+├── templates/                          # copied/rendered to project during harness init
+│   ├── AGENTS.md.tmpl                  # includes gate block + cross_review_reviewer
+│   ├── settings.json.tmpl              # .claude/settings.json hooks registration
 │   └── gitignore-fragment
 │
-├── schema/                             # 数据契约
-│   ├── harness.sql                     # SQLite DDL（建表 + PRAGMA + 版本）
-│   └── migrations/                     # 增量迁移文件 V<N>__<desc>.sql
+├── schema/                             # data contracts
+│   ├── harness.sql                     # SQLite DDL (create tables + PRAGMA + version)
+│   └── migrations/                     # incremental migration files V<N>__<desc>.sql
 │       └── README.md
 │
 └── tests/
-    ├── run.sh                          # 测试入口，发现 .sh + .py
-    ├── lib/{assert.sh, setup.sh}       # bash 测试辅助
-    ├── unit/                           # 全部 mock，CI 跑
+    ├── run.sh                          # test entry point, discovers .sh + .py
+    ├── lib/{assert.sh, setup.sh}       # bash test helpers
+    ├── unit/                           # all mocked, runs in CI
     │   ├── test_atomic_write.sh / test_gate.sh / test_hooks.sh
     │   ├── test_notify.sh / test_notification_hook.sh
     │   ├── test_budget.sh / test_backup.sh / test_events_cli.sh
     │   ├── test_claude_adapter.sh / test_codex_adapter.sh
     │   ├── test_gate_cross_review.sh
-    │   ├── test_db.py                  # 30+ cases 含 migration drill
+    │   ├── test_db.py                  # 30+ cases including migration drill
     │   └── test_harness_task.py
-    ├── integration/                    # e2e mock，CI 跑
+    ├── integration/                    # e2e mocked, runs in CI
     │   ├── test_e2e_success.sh / test_e2e_retry_failed.sh
     │   ├── test_e2e_blocked_resume.sh / test_e2e_orphan_reaper.sh
     │   ├── test_e2e_backend_switch.sh / test_e2e_depends_on.sh
     │   ├── test_init_idempotent.sh / test_harness_infi.sh
-    └── manual/                         # 真模型调用，手动跑，不进 CI
+    └── manual/                         # real model calls, run manually, not in CI
         ├── README.md
         ├── smoke_real_claude.sh
         ├── smoke_real_codex.sh
@@ -84,41 +84,41 @@
         └── smoke_coordinator.sh
 ```
 
-**语言边界**：调子进程/拼命令的薄层用 bash；碰 SQL/状态机/JSON-schema 的用 Python（`src/harness/`）。详见 [CLAUDE.md §8.1](../CLAUDE.md)。
+**Language boundaries**: thin layers calling subprocesses/constructing commands use bash; parts touching SQL/state machine/JSON-schema use Python (`src/harness/`). See [CLAUDE.md §8.1](../CLAUDE.md).
 
-**显式不在仓库**：实现期的 worktree、`.harness/`、`~/.config/harness/` — 它们是运行时产物或全局配置。
+**Explicitly not in repo**: worktrees, `.harness/`, `~/.config/harness/` during runtime — these are runtime artifacts or global configuration.
 
-## 2. 模块清单与职责
+## 2. Module List and Responsibilities
 
-| # | 模块 | 路径 | 单一职责 | 写者 |
-|---|------|------|---------|------|
-| M1 | 用户入口 | `bin/harness-infi`, `bin/harness` | 启动协调者会话；管理 / 观测命令 | — |
-| M2 | 协调者武装 | `coordinator/` | 协调者 prompt + 协调者可调脚本 | LLM（读） |
-| M3 | 执行编排器 | `src/harness/orchestrator.py` + `worker.py` + `merge.py`（shim: `orchestrator.sh`）| 并行 worker 池 + 串行 merge：claim → worktree → adapter → 门 → 入 merge 队列 → 主线程合并 | 编排器进程 |
-| M4 | 后端适配器 | `adapters/*.sh` | 归一化 backend CLI 调用为统一返回结构 | adapter 进程 |
-| M5 | SQLite 存储 | `src/harness/db.py` + `src/harness/cli/db_cli.py` + `schema/harness.sql` | 队列 / 状态机 / 会话 / 调用账（Python，真参数化，`BEGIN IMMEDIATE`） | 编排器独占 |
-| M6 | 文件黑板 | `src/harness/atomic_write.py` + `schema/json/` | worker 与人 → 编排器的写入界面 | 见 §4 |
-| M7 | 校验门 | `lib/gate.sh` | 多步骤检查 → `.gate-report.json` | gate 进程 |
-| M8 | 安全 hooks | `hooks/` | 项目 `.claude/settings.json` 注册，确定性拦截 | hook 进程 |
-| M9 | 通知路由 | `src/harness/notify.py` + `hooks/notification.sh` | events 表 + JSON 文件 + 桌面通知（pull-on-re-engagement，见 coordinator.md §2.2） | notify 进程 |
-| M10 | 成本闸 | `src/harness/budget.py` + orchestrator `_budget_guard` | 累计 + 超限 kill switch + budget_exceeded 事件 | 编排器调用 |
-| M11 | 项目初始化 | `bin/harness init` + `templates/` | bootstrap 新项目；`--backend` 反转默认 reviewer | 初始化脚本 |
-| M12 | 调用日志 | adapter 内 `_log_raw` | 调用 JSON 落 `logs/raw/`（含 envelope）| adapter 进程 |
-| M13 | 孤儿回收 | orchestrator `_reap_orphans` + `_timeout_blocked` | 单进程下崩溃残留任务自愈 + BLOCKED 超时回收 | 编排器调用 |
-| M14 | 备份 | `bin/harness backup` + 合并节点自动钩 | sqlite3 `.backup` + 保留策略（默 7 天） | bin/harness |
+| # | Module | Path | Single Responsibility | Writer |
+|---|--------|------|----------------------|--------|
+| M1 | User entry | `bin/harness-infi`, `bin/harness` | Start coordinator session; management / observation commands | — |
+| M2 | Coordinator arming | `coordinator/` | Coordinator prompt + coordinator-callable scripts | LLM (reads) |
+| M3 | Execution orchestrator | `src/harness/orchestrator.py` + `worker.py` + `merge.py` (shim: `orchestrator.sh`) | Parallel worker pool + serial merge: claim → worktree → adapter → gate → merge queue → main thread merge | Orchestrator process |
+| M4 | Backend adapters | `adapters/*.sh` | Normalize backend CLI calls into unified return structure | Adapter process |
+| M5 | SQLite storage | `src/harness/db.py` + `src/harness/cli/db_cli.py` + `schema/harness.sql` | Queue / state machine / sessions / call ledger (Python, true parameterization, `BEGIN IMMEDIATE`) | Orchestrator exclusive |
+| M6 | File blackboard | `src/harness/atomic_write.py` + `schema/json/` | Worker and human → orchestrator write interface | See §4 |
+| M7 | Validation gate | `lib/gate.sh` | Multi-step checks → `.gate-report.json` | Gate process |
+| M8 | Security hooks | `hooks/` | Registered in project `.claude/settings.json`; deterministic interception | Hook process |
+| M9 | Notification routing | `src/harness/notify.py` + `hooks/notification.sh` | events table + JSON files + desktop notification (pull-on-re-engagement, see coordinator.md §2.2) | Notify process |
+| M10 | Cost gate | `src/harness/budget.py` + orchestrator `_budget_guard` | Accumulation + over-limit kill switch + budget_exceeded event | Orchestrator call |
+| M11 | Project initialization | `bin/harness init` + `templates/` | Bootstrap new project; `--backend` flips default reviewer | Initialization script |
+| M12 | Call logging | adapter internal `_log_raw` | Call JSON written to `logs/raw/` (including envelope) | Adapter process |
+| M13 | Orphan recovery | orchestrator `_reap_orphans` + `_timeout_blocked` | Single-process crash residue self-healing + BLOCKED timeout recovery | Orchestrator call |
+| M14 | Backup | `bin/harness backup` + automatic merge hook | sqlite3 `.backup` + retention policy (default 7 days) | bin/harness |
 
-## 3. 依赖关系图（自下而上）
+## 3. Dependency Graph (Bottom-Up)
 
 ```
                     ┌──────────────────────────────────┐
-                    │  M1 入口 (harness-infi, harness) │
+                    │  M1 Entry (harness-infi, harness) │
                     └──────────────┬───────────────────┘
                                    │
                   ┌────────────────┼────────────────┐
                   ▼                ▼                ▼
        ┌──────────────────┐  ┌──────────┐   ┌─────────────┐
-       │ M2 协调者武装      │  │ M11 init │   │ M3 编排器   │
-       │ (harness-task)   │  │          │   │ orchestrator│
+       │ M2 Coordinator   │  │ M11 init │   │ M3 Orch-    │
+       │ (harness-task)   │  │          │   │ estrator    │
        └────────┬─────────┘  └────┬─────┘   └──────┬──────┘
                 │                 │                 │
                 ▼                 ▼                 ▼
@@ -136,40 +136,40 @@
                                              │
                                              ▼
                                     ┌──────────────────┐
-                                    │ backend CLI 进程 │
+                                    │ backend CLI proc │
                                     └──────────────────┘
 
-  M8 hooks 独立部署到项目 .claude/settings.json，被 backend CLI 触发，
-  通过 stderr/exit code 与调用方通信，不在调用链内。
+  M8 hooks deployed independently to project .claude/settings.json, triggered by backend CLI,
+  communicates with caller via stderr/exit code; not in the call chain.
 ```
 
-**规则**：
+**Rules**:
 
-- 上层只调下层，不反向。
-- `lib/` 之间相互独立，不互调（除非显式声明）。例外：`budget.sh` 与 `notify.sh` 都需调 `db.sh`。
-- `adapters/` 不依赖 db / notify — 它们是纯函数式包装，输入提示词、输出统一结构。
-- `hooks/` 是部署到外部项目的脚本，**禁止依赖 harness 仓库的 lib**（项目里没有），所有需要的工具函数 inline。
+- Upper layers only call lower layers, never the reverse.
+- `lib/` modules are independent of each other; no cross-calls (unless explicitly declared). Exception: `budget.sh` and `notify.sh` both need to call `db.sh`.
+- `adapters/` don't depend on db / notify — they are purely functional wrappers: input prompts, output unified structure.
+- `hooks/` are scripts deployed to external projects; **must not depend on harness repo's `lib`** (not available in the project); all needed utilities are inlined.
 
-## 4. 写者归属（单写者原则）
+## 4. Writer Ownership (Single-Writer Principle)
 
-| 文件/资源 | 唯一写者 | 读者 |
-|-----------|---------|------|
-| `<project>/.harness/harness.db` | 编排器（M3）、协调者经 `harness-task`（M2）| 所有需要状态的进程 |
-| `<project>/.harness/workers/<id>/status.json` | 该 worker（adapter 内的 backend 进程）| 编排器 |
-| `<project>/.harness/workers/<id>/guidance.json` | 该 worker | 编排器、协调者 |
-| `<project>/.harness/inbox/<id>.answer` | 人 / 协调者 | 编排器（摄取后注入下一轮 prompt）|
-| `<project>/.harness/logs/raw/*.json` | M12 log | 排障人员 |
-| `<worktree>/.gate-report.json` | M7 gate | 编排器（回灌）、人 |
-| `<project>/AGENTS.md` | 人 | 所有 agent |
-| `<project>/specs/<task_id>.md` | 人 / 协调者 | worker |
+| File/Resource | Sole Writer | Readers |
+|--------------|------------|---------|
+| `<project>/.harness/harness.db` | Orchestrator (M3), coordinator via `harness-task` (M2) | All processes needing state |
+| `<project>/.harness/workers/<id>/status.json` | That worker (backend process inside adapter) | Orchestrator |
+| `<project>/.harness/workers/<id>/guidance.json` | That worker | Orchestrator, coordinator |
+| `<project>/.harness/inbox/<id>.answer` | Human / coordinator | Orchestrator (ingested and injected into next prompt) |
+| `<project>/.harness/logs/raw/*.json` | M12 log | Debugging personnel |
+| `<worktree>/.gate-report.json` | M7 gate | Orchestrator (for feedback), humans |
+| `<project>/AGENTS.md` | Human | All agents |
+| `<project>/specs/<task_id>.md` | Human / coordinator | Worker |
 
-并发安全：JSON 原子写（`*.tmp` → `mv`），SQLite WAL + busy_timeout=5000。
+Concurrency safety: JSON atomic write (`*.tmp` → `mv`), SQLite WAL + busy_timeout=5000.
 
-## 5. 计费平面分离
+## 5. Billing Plane Separation
 
-| 平面 | 进程 | 计费 | API key |
-|------|------|------|---------|
-| 对话（协调者） | `harness-infi` 启动的交互式 `claude` | 订阅额度 | 个人订阅 |
-| 执行（worker） | `adapters/` 内的 `claude -p` / `codex exec` / `opencode run` | 程序化（API） | 独立 API key，启用 prompt caching |
+| Plane | Process | Billing | API key |
+|-------|---------|---------|---------|
+| Conversation (coordinator) | Interactive `claude` started by `harness-infi` | Subscription quota | Personal subscription |
+| Execution (worker) | `claude -p` / `codex exec` / `opencode run` inside `adapters/` | Programmatic (API) | Separate API key, prompt caching enabled |
 
-入口与配置分离强制此边界，开发期不要混用 key。
+Entry point and configuration separation enforces this boundary; do not mix keys during development.

@@ -1,0 +1,64 @@
+# Error Journal
+
+Records **recurring pitfalls** in this project and how they were fixed, so future agents and workers can avoid them.
+
+## Why This File Exists
+
+LLMs repeat the same class of mistakes across sessions (typical examples: misusing a library API, an implicit fixture convention, a toolchain version trap). Without persistence, every occurrence forces gate.sh to bounce it back for a rewrite — wasting tokens and time. Writing down "known traps" lets workers see them upfront and steer clear.
+
+Workers read this file before starting any task.
+
+## What Goes Here / What Doesn't
+
+**Include**:
+
+- The **root cause** of a gate failure (not the symptom itself, but why it happened)
+- The same class of error has occurred 2+ times
+- Traps that could recur across different tasks
+- Temporary workarounds + TODOs (mark `[WORKAROUND]`)
+
+**Exclude**:
+
+- One-off mistakes (belongs to that task's own retry; already handled by the gate)
+- Open questions still being debugged (note in the spec first; move here once confirmed)
+- Things a code comment explains well enough
+
+## Format
+
+Each entry in reverse chronological order:
+
+```
+## YYYY-MM-DD: <one-line symptom>
+
+- Trigger: <what kind of task/operation hits this>
+- Symptom: <the error message or test output you'll see>
+- Root cause: <the real reason, not the surface error>
+- Fix: <how to handle it next time>
+- Status: fixed / [WORKAROUND]
+```
+
+## Example
+
+```
+## 2026-01-20: pytest fixture order causing db test pollution between tests
+
+- Trigger: new test added with fixtures in wrong order
+- Symptom: test passes in isolation, some cases FAIL in full suite (order-dependent)
+- Root cause: `db_session` fixture depends on `engine` fixture, but conftest had them reversed
+- Fix: all db-related tests must have `pytestmark = pytest.mark.usefixtures("clean_db")` at the top
+- Status: fixed
+```
+
+```
+## 2026-02-03: [WORKAROUND] aiohttp 3.9 on macOS sporadic keep-alive hang
+
+- Trigger: sporadic hang ≥ 30s running integration tests
+- Symptom: test has no timeout, eventually CI times out entirely
+- Root cause: aiohttp 3.9.x + macOS launchd network stack interaction bug (upstream #8421)
+- Fix: explicitly `await session.close()` after each session, with `connector_owner=True`
+- Status: [WORKAROUND] — revert once aiohttp 3.10 is released
+```
+
+---
+
+<!-- append new entries here -->

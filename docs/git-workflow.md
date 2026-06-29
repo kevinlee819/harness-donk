@@ -1,75 +1,75 @@
-# Git 操作规范
+# Git Workflow
 
-本仓库的 git 使用约定。**适用于本工具仓库本身（`~/tools/harness/`），不是 harness 接管的用户项目**。
+Git usage conventions for this repository. **Applies to this tool repository itself (`~/tools/harness/`), not to user projects managed by harness**.
 
-> 历史背景：项目最初没有用 git 管理（疏忽），首次接入在 2026-06-25 第一次正式 commit 时回溯整理。后续开发严格按本规范走。
+> Historical note: The project initially wasn't managed by git (an oversight); the first formal commit was made during backfill on 2026-06-25. All subsequent development strictly follows this workflow.
 
-## 1. 何时提交
+## 1. When to Commit
 
-**每完成一个逻辑单元就提交**，不要攒。判断标准：
+**Commit after each logical unit is complete** — don't batch them up. Criteria:
 
-- ✅ 一个功能从需求到测试全绿，是一个单元
-- ✅ 一次重构（如「db.sh 改成 db.py」）是一个单元
-- ✅ 一份文档（如「写 coordinator.md」）是一个单元
-- ❌ "写到一半留着明天"不是单元，要么完成要么 stash
-- ❌ "改了 10 处 typo + 加了一个功能"是两个单元，分开
+- A feature from requirement to passing tests — one unit
+- A refactor (e.g. "migrate db.sh to db.py") — one unit
+- A document (e.g. "write coordinator.md") — one unit
+- "Got halfway through, leaving it for tomorrow" — NOT a unit; either finish it or stash it
+- "Fixed 10 typos + added a feature" — TWO units; split them
 
-经验值：每次会话内通常应该有 2–5 个 commit。一个会话一个巨型 commit 是反模式。
+Rule of thumb: a typical session should have 2–5 commits. One giant commit per session is an anti-pattern.
 
-**绝对硬规**：
+**Absolute hard rules**:
 
-1. **测试不绿不许 commit**（除非显式标 WIP 且本地分支）
-2. **不许 commit 密钥 / .env / API key**（gitignore 已挡，但每次 `git add` 前肉眼扫一眼）
-3. **不许 commit `.venv/` / `__pycache__/` / 备份文件**（gitignore 已挡）
+1. **No commits when tests are red** (unless explicitly marked WIP on a local branch)
+2. **No committing secrets / .env / API keys** (already covered by gitignore, but eyeball `git add` each time)
+3. **No committing `.venv/` / `__pycache__/` / backup files** (already covered by gitignore)
 
-## 2. 提交消息格式
-
-```
-<type>: <50 字内 summary>
-
-<空行>
-
-<正文：为什么做这个改动，做了哪些事，对外影响>
-
-<空行（可选）>
-
-<尾部：测试结果 / breaking change 标记 / Co-Authored-By>
-```
-
-### 2.1 type 词表
-
-| type | 用途 | 例 |
-|------|------|----|
-| `feat` | 新功能 | `feat: add lib/notify.sh + events table writes` |
-| `fix` | 修 bug | `fix: bash ${3:-{}} parsing inflates payload with extra }` |
-| `refactor` | 不改外部行为的重写 | `refactor: replace lib/db.sh with src/harness/db.py` |
-| `test` | 加/改测试 | `test: cover event_write JSON round-trip` |
-| `docs` | 文档 | `docs: write coordinator.md system prompt` |
-| `chore` | 工具 / 配置 / 依赖 | `chore: add uv.lock, switch to .venv-managed python` |
-| `revert` | 回退 | `revert: revert "feat: add foo"` |
-
-**严禁** `update`、`misc`、`stuff`、`WIP`（除本地分支）。每个 commit 都应该一句话说清楚做了什么。
-
-### 2.2 Summary 行（首行）
-
-- 50 字以内（含 type）
-- 祈使句、小写起头（`add` 不是 `Adds` / `Added`）
-- 不加句号
-- 范围具体：`feat: add harness backup` 比 `feat: add backup feature` 好
-
-### 2.3 正文（body）
-
-正文写 **为什么**，不写 **做了什么**——做了什么 `git show` 自己看 diff。
-
-模板：
+## 2. Commit Message Format
 
 ```
-<问题 / 动机>。
-<采取的方案 / 关键决策>。
-<对外影响：API 变更 / 配置变更 / 测试新增数>。
+<type>: <summary under 50 chars>
+
+<blank line>
+
+<body: why this change was made, what was done, external impact>
+
+<blank line (optional)>
+
+<trailer: test results / breaking change notes / Co-Authored-By>
 ```
 
-示例：
+### 2.1 Type Vocabulary
+
+| type | Purpose | Example |
+|------|---------|---------|
+| `feat` | new feature | `feat: add lib/notify.sh + events table writes` |
+| `fix` | bug fix | `fix: bash ${3:-{}} parsing inflates payload with extra }` |
+| `refactor` | rewrite without changing external behavior | `refactor: replace lib/db.sh with src/harness/db.py` |
+| `test` | add/change tests | `test: cover event_write JSON round-trip` |
+| `docs` | documentation | `docs: write coordinator.md system prompt` |
+| `chore` | tooling / config / dependencies | `chore: add uv.lock, switch to .venv-managed python` |
+| `revert` | revert a previous commit | `revert: revert "feat: add foo"` |
+
+**Prohibited**: `update`, `misc`, `stuff`, `WIP` (except on local branches). Every commit should describe in one sentence what was done.
+
+### 2.2 Summary Line (First Line)
+
+- Under 50 characters (including type)
+- Imperative mood, lowercase start (`add` not `Adds` / `Added`)
+- No trailing period
+- Be specific: `feat: add harness backup` is better than `feat: add backup feature`
+
+### 2.3 Body
+
+The body explains **why**, not **what** — the `git show` diff already shows what.
+
+Template:
+
+```
+<problem / motivation>.
+<approach taken / key decisions>.
+<external impact: API changes / config changes / test count added>.
+```
+
+Example:
 
 ```
 fix: adapter blocked by claude default permission mode in --print
@@ -90,85 +90,85 @@ Verified: T-hello1 now completes in 3 turns / 12.5s / $0.006.
 70/70 mock tests still green.
 ```
 
-### 2.4 尾部签名
+### 2.4 Trailer Signature
 
-每个 Claude-author 的 commit 末尾加：
+Every Claude-authored commit ends with:
 
 ```
 Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
 ```
 
-> 已在 Claude Code 的 commit 流程默认行为里；正文末尾留一空行接它。
+> Already part of Claude Code's default commit behavior; leave a blank line before it at the end of the body.
 
-## 3. 不提交什么
+## 3. What Not to Commit
 
-- `.venv/`、`__pycache__/`、`*.pyc`、`.pytest_cache/`（已 gitignore）
-- `.harness/`、`.worktrees/`、运行时产物（用户项目里的，工具本仓库通常不出现）
-- 备份 `.bak`、`*.orig`、编辑器临时文件 `.swp`、`*~`
-- 任何含 API key / token / 私钥 的文件
-- 大二进制（>5MB 单文件需 review）
+- `.venv/`, `__pycache__/`, `*.pyc`, `.pytest_cache/` (already gitignored)
+- `.harness/`, `.worktrees/`, runtime artifacts (in user projects; the tool repo doesn't usually have these)
+- Backups `.bak`, `*.orig`, editor temp files `.swp`, `*~`
+- Any file containing API keys / tokens / private keys
+- Large binaries (>5MB per file needs review)
 
-**例外不提交的**：`uv.lock` 必须进 git（CLAUDE.md §8.3）。这点反直觉但是对的——锁文件就是要锁。
+**Counterintuitive exception**: `uv.lock` MUST be in git (CLAUDE.md §8.3). This is correct despite feeling backwards — lock files are meant to lock.
 
-## 4. 分支策略
+## 4. Branching Strategy
 
-**当前（单人 MVP 阶段）**：
+**Current (solo MVP phase)**:
 
-- 直接在 `main` 上提交，不开 feature branch
-- 凡需多 commit 的实验，先 `git stash` 或临时分支 `wip/<topic>`，搞定再合回 `main`
+- Commit directly to `main`; no feature branches
+- For experiments requiring multiple commits, use `git stash` or a temporary `wip/<topic>` branch; merge back to `main` when done
 
-**将来（协作或公开后）**：
+**Future (after collaboration or going public)**:
 
-- `main` 只接 PR
-- feature branch 命名：`feat/<topic>` / `fix/<topic>`
-- PR 至少自审一遍 diff 再合
+- `main` only accepts PRs
+- Feature branch naming: `feat/<topic>` / `fix/<topic>`
+- At least self-review the diff before merging
 
-## 5. 与 harness 接管的项目的关系
+## 5. Relationship with Projects Managed by harness
 
-**警惕**：本仓库（`~/tools/harness/`）和 harness 接管的用户项目都是 git 仓库，**绝不混淆**：
+**Be alert**: This repo (`~/tools/harness/`) and user projects managed by harness are both git repositories — **never confuse them**:
 
-| 仓库 | 主分支 | worker 写哪 |
-|------|--------|-------------|
-| 本工具仓库 | `main`（Claude 直接提交） | 不适用 |
-| 接管的用户项目 | 项目自己的主分支 | worker 的 worktree → 编排器 merge |
+| Repository | Main branch | Where workers write |
+|-----------|------------|-------------------|
+| This tool repo | `main` (Claude commits directly) | N/A |
+| Managed user project | project's own main branch | worker's worktree → orchestrator merge |
 
-**禁令**：
+**Prohibitions**:
 
-- 工具本身的代码改动**绝不**走 worker → 编排器路径。Claude 在本仓库就是普通开发者，直接 `git commit`。
-- 用户项目内的代码改动**绝不**让协调者直接 `git commit` 主分支。那是 worker + 编排器的职责。
+- Code changes to the tool itself **must never** go through the worker → orchestrator path. Claude is just a regular developer in this repo; commits directly with `git commit`.
+- Code changes inside a user project **must never** have the coordinator directly `git commit` to main. That is the worker + orchestrator's responsibility.
 
-## 6. 不许做的危险操作
+## 6. Prohibited Dangerous Operations
 
-未经用户明确授权一律不做：
+Without explicit user authorization, never:
 
-- ❌ `git push --force` / `--force-with-lease`（hooks 已挡用户项目内的，本仓库靠自律）
-- ❌ `git reset --hard` 到比当前 HEAD 老的 commit
-- ❌ `git commit --amend` 已 push 出去的 commit
-- ❌ `git rebase -i` 修改历史
-- ❌ `git clean -fd` 不读 `git status` 就跑
-- ❌ `--no-verify` 跳过 pre-commit hook
-- ❌ 删分支前不看 `git log <branch>`
+- `git push --force` / `--force-with-lease` (hooks already block this in user projects; this repo relies on discipline)
+- `git reset --hard` to a commit older than the current HEAD
+- `git commit --amend` on already-pushed commits
+- `git rebase -i` to modify history
+- `git clean -fd` without reading `git status` first
+- `--no-verify` to skip pre-commit hooks
+- Delete a branch without checking `git log <branch>`
 
-需要做上述操作时**先停下来问用户**。
+When any of the above is needed, **stop and ask the user first**.
 
-## 7. 提交前自检清单
+## 7. Pre-Commit Self-Check
 
-每次 `git add` 之前回答四个问题：
+Answer four questions before every `git add`:
 
-1. **测试过了吗？** `bash tests/run.sh` 全绿。
-2. **diff 干净吗？** `git diff --staged` 一眼能看完，没有 unrelated 改动。
-3. **TODO.md 更新了吗？** 完成项打勾，否则下次会重做。
-4. **commit message 能解释「为什么」吗？** 不能就重写 message。
+1. **Tests pass?** `bash tests/run.sh` all green.
+2. **Diff is clean?** `git diff --staged` readable at a glance, no unrelated changes.
+3. **TODO.md updated?** Completed items checked off; otherwise you'll redo them next time.
+4. **Does the commit message explain "why"?** If not, rewrite the message.
 
-## 8. 推送
+## 8. Pushing
 
-**MVP 阶段不推任何远端。** 仓库就在本地 `~/tools/harness/.git/`。
+**No remote pushes during MVP phase.** The repo lives locally at `~/tools/harness/.git/`.
 
-将来推到远端时另行约定（GitHub / GitLab / 私服）。在那之前 `git push` 不可用——也不需要。
+Remote push arrangements to be decided separately in the future (GitHub / GitLab / private). Until then `git push` is unavailable — and unnecessary.
 
-## 9. 工具仓库的 `.gitignore`
+## 9. Tool Repo `.gitignore`
 
-当前覆盖（[/.gitignore](../.gitignore)）：
+Current coverage ([/.gitignore](../.gitignore)):
 
 ```
 .venv/
@@ -183,8 +183,8 @@ build/
 dist/
 ```
 
-新增依赖时同步更新。
+Update in sync when new dependencies are added.
 
 ---
 
-**底线**：版本控制不是事后整理，是开发的一部分。每个 commit 都是一个可回退、可解释的检查点。
+**Bottom line**: Version control is not post-hoc housekeeping — it's part of development. Every commit is a reversible, explainable checkpoint.

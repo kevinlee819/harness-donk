@@ -2,18 +2,19 @@
 
 Why this exists
 ---------------
-adapter 拿到的 token 使用量字段在不同 backend 之间形状各异：
+Token usage fields from adapters vary in shape across backends:
 
-- Claude CLI 输出（API key 模式）已有 `total_cost_usd`，Anthropic 后端算的，权威；
-  订阅 / OAuth max 模式下该字段缺失或 0 —— 那才需要本模块兜底。
-- Codex CLI **从不**输出 USD，只给 `turn.completed.usage = {input_tokens,
-  cached_input_tokens, output_tokens, reasoning_output_tokens}`，要靠本表算。
+- Claude CLI (API-key mode) already provides `total_cost_usd` computed by Anthropic —
+  authoritative. In subscription/OAuth-max mode that field is missing or 0; this module
+  fills in the gap.
+- Codex CLI never outputs USD; it only provides `turn.completed.usage = {input_tokens,
+  cached_input_tokens, output_tokens, reasoning_output_tokens}` — cost is computed here.
 
-价目表来源：litellm/model_prices_and_context_window.json 的子集，挑 harness
-adapter 实际能调到的模型，存在 schema/model-prices.json。
+Price table source: a subset of litellm/model_prices_and_context_window.json, covering
+only the models that harness adapters can actually call, stored in schema/model-prices.json.
 
-未知模型走 family fallback（opus/sonnet/haiku / gpt-5/gpt-4 / o1），fallback
-都不中再返回 None —— 让调用方自己决定是 NULL 还是报错。
+Unknown models try a family fallback (opus/sonnet/haiku / gpt-5/gpt-4 / o1); if all
+fallbacks fail, returns None — letting the caller decide between NULL and an error.
 """
 
 from __future__ import annotations

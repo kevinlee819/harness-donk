@@ -19,6 +19,7 @@ from typing import Optional
 from harness import db
 from harness.adapter import call as adapter_call
 from harness.atomic_write import write_json
+from harness.i18n import t
 from harness.merge import MergeRequest
 from harness.notify import notify
 
@@ -289,11 +290,7 @@ class WorkerThread(threading.Thread):
                 failed_steps = "\n".join(lines)
             except (json.JSONDecodeError, OSError):
                 pass
-        prompt_file.write_text(
-            "上一次提交未通过校验门，需修复后重新提交：\n\n"
-            f"{failed_steps}\n\n"
-            "请只修复上述问题，不要扩大改动范围。完成后再次 git add & git commit。\n"
-        )
+        prompt_file.write_text(t("worker.gate_retry_prompt", steps=failed_steps))
 
     # ── job entry points ───────────────────────────────
     def _run_initial(self) -> None:
@@ -327,12 +324,9 @@ class WorkerThread(threading.Thread):
 
         prompt_file = worktree / ".harness-prompt.txt"
         prompt_file.write_text(
-            "=== TASK SPEC ===\n"
-            f"{spec_full.read_text()}\n"
-            "\n"
-            "=== INSTRUCTIONS ===\n"
-            "请基于上述 spec 在当前目录完成任务。完成后必须 git add & git commit。\n"
-            "禁止 push、merge 主分支，禁止离开本工作目录。\n"
+            t("worker.initial_spec_header") + "\n"
+            + spec_full.read_text() + "\n\n"
+            + t("worker.initial_instructions")
         )
 
         self._drive(branch, worktree, prompt_file, "")
@@ -378,13 +372,12 @@ class WorkerThread(threading.Thread):
                 pass
 
         prompt_file = worktree / ".harness-prompt.txt"
-        parts = ["=== RESUME — 用户/协调者已答复 ==="]
+        parts = [t("worker.resume_header")]
         if question:
-            parts.append(f"上一次提问：{question}")
-        parts.append(f"决策：{answer}")
+            parts.append(t("worker.resume_previous_question", question=question))
+        parts.append(t("worker.resume_decision", answer=answer))
         parts.append("")
-        parts.append("请基于此决策继续完成任务。完成后必须 git add & git commit。")
-        parts.append("禁止 push、merge 主分支，禁止离开本工作目录。")
+        parts.append(t("worker.resume_instructions"))
         prompt_file.write_text("\n".join(parts) + "\n")
 
         if guidance.is_file():

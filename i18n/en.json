@@ -1,0 +1,9 @@
+{
+  "worker.gate_retry_prompt": "Previous commit failed the gate. Please fix and resubmit:\n\n{steps}\n\nFix only the issues listed above — do not expand scope. When done, git add & git commit.\n",
+  "worker.initial_spec_header": "=== TASK SPEC ===",
+  "worker.initial_instructions": "=== INSTRUCTIONS ===\nImplement the task described in the spec above, in the current directory. When done, you must git add & git commit.\nDo NOT push, merge into main branch, or leave this worktree.\n",
+  "worker.resume_header": "=== RESUME — User/Coordinator has replied ===",
+  "worker.resume_previous_question": "Previous question: {question}",
+  "worker.resume_decision": "Decision: {answer}",
+  "worker.resume_instructions": "Continue the task based on this decision. When done, you must git add & git commit.\nDo NOT push, merge into main branch, or leave this worktree."
+}

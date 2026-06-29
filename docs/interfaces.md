@@ -1,12 +1,12 @@
-# 模块接口
+# Module Interfaces
 
-本文档形式化定义模块间的契约：脚本入参/出参、函数签名、文件触发关系。**改动这里的任何一处都必须同步上下游**。
+This document formally defines the contracts between modules: script inputs/outputs, function signatures, and file trigger relationships. **Any change here must be synchronized upstream and downstream**.
 
-数据 schema 的字段定义见 [data-schemas.md](data-schemas.md)，本文只描述「谁调谁、传什么、收什么」。
+Field definitions for data schemas are in [data-schemas.md](data-schemas.md); this document only describes "who calls whom, what they pass, and what they receive."
 
 ---
 
-## 1. 用户入口（M1）
+## 1. User Entry (M1)
 
 ### 1.1 `harness-infi`
 
@@ -14,93 +14,93 @@
 harness-infi [--no-attach] [--backend <name>] [--model <name>]
 ```
 
-- 行为：在当前目录创建/复用一个 tmux 会话（名 `harness-<sha8(pwd)>`），含两个 window：
-  - **window 0 `coordinator`**：交互式 `claude` 加载 `coordinator/coordinator.md` 为 system prompt，PATH 注入 `coordinator/tools/`（`harness-task` 可用）
-  - **window 1 `orchestrator`**：长跑 `orchestrator.sh`（无 `--once`），每 5s 轮询 queue；任务来了立刻派
-- 默认 attach 到 window 0；`Ctrl-B 0/1` 切窗，`Ctrl-B D` detach 后会话继续存活
-- 选项：
-  - `--no-attach`：仅创建会话（脚本/CI 用），结束后用 `tmux attach -t harness-<hash>` 进入
-  - `--backend <name>`：orchestrator 用哪个写者 backend（默 `claude`，需 `adapters/${name}.sh` 存在）
-  - `--model <name>`：透传给 adapter（如 `claude-sonnet-4-6`）
-- 前置：当前目录必须是已 `harness init` 过的项目（`.harness/harness.db` 存在）；`tmux`、`claude` 在 PATH
-- 失败：未初始化 → 提示 `harness init`；缺失 backend CLI / 未知 backend → 提示 `harness doctor` / 选项 typo
-- 实现备注：两个 launcher 脚本写到 `.harness/.coordinator-launcher.sh` 和 `.harness/.orchestrator-launcher.sh`，避开 shell 引号灾难；tmux session 开了 `remain-on-exit on`，orchestrator daemon 挂掉后 pane 仍保留以便排障
+- Behavior: Creates or reuses a tmux session in the current directory (named `harness-<sha8(pwd)>`), with two windows:
+  - **window 0 `coordinator`**: Interactive `claude` loading `coordinator/coordinator.md` as system prompt, with `coordinator/tools/` injected into PATH (`harness-task` available)
+  - **window 1 `orchestrator`**: Long-running `orchestrator.sh` (without `--once`), polling queue every 5s; dispatches immediately when tasks arrive
+- Attaches to window 0 by default; `Ctrl-B 0/1` to switch windows, `Ctrl-B D` to detach while session remains alive
+- Options:
+  - `--no-attach`: Only create the session (for scripts/CI); use `tmux attach -t harness-<hash>` afterward to enter
+  - `--backend <name>`: Which writer backend the orchestrator uses (default `claude`; requires `adapters/${name}.sh` to exist)
+  - `--model <name>`: Passed through to adapter (e.g. `claude-sonnet-4-6`)
+- Prerequisites: Current directory must be a project that has been `harness init`-ed (`.harness/harness.db` exists); `tmux` and `claude` in PATH
+- Failures: Not initialized → prompts `harness init`; missing backend CLI / unknown backend → prompts `harness doctor` / option typo
+- Implementation note: Two launcher scripts written to `.harness/.coordinator-launcher.sh` and `.harness/.orchestrator-launcher.sh`, avoiding shell quoting nightmares; tmux session opened with `remain-on-exit on` so the orchestrator daemon pane remains after crash for debugging
 
 ### 1.2 `harness`
 
 ```
-harness setup                            # 一次性环境：校验依赖、建 ~/.config/harness/
-harness doctor                           # 各 backend echo 级自检（真调 claude + codex）
-harness init [--backend claude|codex]    # 当前目录 bootstrap：建 .harness/、装模板、装 hooks
-                                         # --backend 决定 AGENTS.md 默认 cross_review_reviewer
-                                         # （writer-reviewer 自动反转：claude→codex / codex→claude）
-harness status [--task <id>] [--history] # 任务列表 / 单任务详情 / 迁移史
-harness events pending                   # 列出待处理事件（needs_decision / failed / completed / budget_exceeded）
-harness events ack <eid>...              # 标记事件已交付（防止协调者重复报告）
-harness attach [<worker_id>]             # attach 到 tmux（无参 = 协调者会话）
+harness setup                            # one-time environment: validate deps, create ~/.config/harness/
+harness doctor                           # echo-level self-check for each backend (real calls to claude + codex)
+harness init [--backend claude|codex]    # bootstrap current directory: create .harness/, install templates, install hooks
+                                         # --backend determines default cross_review_reviewer in AGENTS.md
+                                         # (writer-reviewer auto-flip: claude→codex / codex→claude)
+harness status [--task <id>] [--history] # task list / single task details / transition history
+harness events pending                   # list pending events (needs_decision / failed / completed / budget_exceeded)
+harness events ack <eid>...              # mark events as delivered (prevent coordinator from reporting duplicates)
+harness attach [<worker_id>]             # attach to tmux (no argument = coordinator session)
 harness backup                           # sqlite3 .backup → .harness/backups/harness-<ts>.db
-                                         # 含保留策略（默 7 天，HARNESS_BACKUP_RETAIN_DAYS 可调）
+                                         # includes retention policy (default 7 days, HARNESS_BACKUP_RETAIN_DAYS adjustable)
 harness run-once [--mock] [--backend N] [--model M] [--max-retries N]
-                                         # 跑一轮编排器（处理一个任务后退出，调试 / 验收用）
+                                         # run one orchestrator cycle (process one task then exit, for debugging/acceptance)
 ```
 
-返回码：0 成功，1 用户错误（缺参等），2 系统错误（依赖缺失、数据库损坏）。
+Return codes: 0 success, 1 user error (missing args etc.), 2 system error (missing dependency, database corruption).
 
-未实现：`stop` / `ls` —— 当前 MVP/iter 1-2 范围未需。
+Not implemented: `stop` / `ls` — not needed for current MVP/iter 1-2 scope.
 
 ---
 
-## 2. 协调者武装（M2）
+## 2. Coordinator Arming (M2)
 
 ### 2.1 `coordinator/tools/harness-task`
 
-协调者可调脚本。**只对协调者暴露**，是协调者写入任务队列的唯一手段。
+Script callable by the coordinator. **Exposed only to the coordinator** — the sole means by which the coordinator writes to the task queue.
 
 ```
 harness-task add [--id T-XXX] [--priority N] [--depends-on T-A,T-B] [--spec PATH]
-                 # body 走 stdin → 写到 specs/<id>.md（除非 --spec 指向已存在文件）
+                 # body via stdin → written to specs/<id>.md (unless --spec points to existing file)
 harness-task query [--status queued|dispatched|working|gating|blocked|merged|failed]
                    [--task T-XXX] [--json]
-harness-task history <task_id>          # 状态迁移历史
-harness-task cancel  <task_id>          # 取消未完成任务（→ failed, reason=user_cancelled）
-harness-task answer  <task_id> <text>   # 答复 BLOCKED 状态的任务（写 inbox/<id>.answer）
+harness-task history <task_id>          # state transition history
+harness-task cancel  <task_id>          # cancel unfinished task (→ failed, reason=user_cancelled)
+harness-task answer  <task_id> <text>   # reply to a BLOCKED task (writes inbox/<id>.answer)
 ```
 
-- 输入：命令行参数 + stdin（`add` 的 spec body 可走 stdin）。
-- 输出：stdout 一行 JSON `{ok: bool, task_id: "T-XXX", error?: "..."}`。
-- 实现：薄 shim 调 `python -m harness.cli.harness_task`，**绝不让协调者直接拼 SQL**（CLAUDE.md §8.1 语言边界）。
+- Input: command-line arguments + stdin (`add`'s spec body can come via stdin).
+- Output: one-line JSON on stdout `{ok: bool, task_id: "T-XXX", error?: "..."}`.
+- Implementation: thin shim calling `python -m harness.cli.harness_task`; **never let the coordinator directly construct SQL** (CLAUDE.md §8.1 language boundaries).
 
 ### 2.2 `coordinator/coordinator.md`
 
-- 不是脚本，是 system prompt。
-- 必含：八原则 §2、打扰策略（默认沉默 + 三类触发）、`harness-task` 用法、spec 模板格式、入队前必填检查项（是否有验收命令、是否声明文件范围）。
+- Not a script — it's a system prompt.
+- Must contain: the eight principles §2, interrupt policy (silent by default + three trigger types), `harness-task` usage, spec template format, pre-enqueue required checklist (must have acceptance commands, must declare file scope).
 
 ---
 
-## 3. 执行编排器（M3）
+## 3. Execution Orchestrator (M3)
 
-### 3.1 `orchestrator.sh` 主循环
+### 3.1 `orchestrator.sh` Main Loop
 
 ```bash
 orchestrator.sh [--project <path>] [--once] [--mock] [--max-retries N] \
                 [--model NAME] [--backend NAME] [--max-workers N]
 ```
 
-- 实质实现：`src/harness/orchestrator.py`；`orchestrator.sh` 是 7 行 shim。
-- `--once`：claim 一个任务，跑到终态（merged/blocked/failed）+ 排干合并队列后退出。
-- `--max-workers N`：worker 池大小（默 4，env `HARNESS_MAX_WORKERS` 也可设）。`--once` 隐式 pool=1。
-- 默认 daemon 模式，由 `harness-infi` 启动时后台拉起，无限循环每空闲 5s 轮询。
-- **并发模型**：每个 worker 一个 `threading.Thread`，主线程独占跑 git merge（严格串行）。worker 通过 `queue.Queue` 把成功的任务交给主线程合并；失败/blocked 由 worker 自己 transition + notify。
+- Real implementation: `src/harness/orchestrator.py`; `orchestrator.sh` is a 7-line shim.
+- `--once`: Claim one task, run to terminal state (merged/blocked/failed) + drain merge queue, then exit.
+- `--max-workers N`: Worker pool size (default 4, env `HARNESS_MAX_WORKERS` also works). `--once` implicitly sets pool=1.
+- Default daemon mode, started in background by `harness-infi`, infinite loop polling every 5s when idle.
+- **Concurrency model**: One `threading.Thread` per worker; main thread exclusively runs git merge (strictly serial). Workers hand off successful tasks to the main thread via `queue.Queue` for merging; failures/blocks are handled by each worker via transition + notify.
 
-**循环伪代码**：
+**Loop pseudocode**:
 
 ```
 loop:
   budget_check || { kill_switch; sleep 30; continue }
-  task = db_claim()              # 原子取 queued 队首
+  task = db_claim()              # atomically claim head of queued
   if !task: sleep 5; continue
   worktree = worktree_create(task)
-  status = adapter_call(task, worktree)   # 见 §4
+  status = adapter_call(task, worktree)   # see §4
   ingest(workers/<id>/status.json)
   if guidance_blocking(): db_transition(task, BLOCKED); notify; continue
   while status == working: poll
@@ -118,9 +118,9 @@ loop:
   db_transition(task, MERGED); notify
 ```
 
-### 3.2 死 worker 扫描器（M3 子进程）
+### 3.2 Dead Worker Scanner (M3 subprocess)
 
-每 60s 跑一次：
+Runs every 60s:
 
 ```sql
 SELECT task_id, worker_id FROM tasks
@@ -128,96 +128,96 @@ JOIN sessions USING(task_id)
 WHERE status='working' AND last_seen < datetime('now', '-10 minutes');
 ```
 
-命中：`db_transition(task, QUEUED, reason='worker_dead')`，`redispatches++`，封顶 2 次后 FAILED。
+On match: `db_transition(task, QUEUED, reason='worker_dead')`, `redispatches++`, capped at 2 before FAILED.
 
 ---
 
-## 4. 后端适配器（M4）— **adapter 合同**
+## 4. Backend Adapters (M4) — Adapter Contract
 
-所有 adapter 暴露同一函数 `adapter_call`：
+All adapters expose the same function `adapter_call`:
 
 ```bash
-# 入参：环境变量
-ADAPTER_TASK_FILE=/path/to/prompt.txt       # 必填，提示词文件路径
-ADAPTER_WORKTREE=/path/to/worktree          # 必填，工作目录
-ADAPTER_SESSION_ID=                         # 可选，存在则续接
-ADAPTER_MAX_TURNS=12                        # 内层上限
-ADAPTER_TIMEOUT=900                         # 外层墙钟，秒
-ADAPTER_BACKEND_MODEL=                      # 可选，指定模型
+# Input: environment variables
+ADAPTER_TASK_FILE=/path/to/prompt.txt       # required; prompt file path
+ADAPTER_WORKTREE=/path/to/worktree          # required; working directory
+ADAPTER_SESSION_ID=                         # optional; if present, resume session
+ADAPTER_MAX_TURNS=12                        # inner turn limit
+ADAPTER_TIMEOUT=900                         # outer wall clock, seconds
+ADAPTER_BACKEND_MODEL=                      # optional; specify model
 
-# 调用
+# Call
 bash adapters/claude.sh
 
-# 出参：stdout 单行 JSON
+# Output: single-line JSON on stdout
 {
   "ok": true,
   "session_id": "uuid-...",
-  "result": "natural language summary",     # 仅供人/排障，禁止做控制决策
+  "result": "natural language summary",     # for humans/debugging only; must not be used for control decisions
   "cost_usd": 0.42,
   "num_turns": 7,
   "files_changed": 5,
-  "error": null                              # ok=false 时填错误简述
+  "error": null                              # filled with error brief when ok=false
 }
 
-# 出参：stderr
-原始 backend 输出 / 调试信息
+# Output: stderr
+raw backend output / debug info
 
-# 退出码
-0  正常完成（ok 可能 true/false，由 JSON.error 区分业务失败 vs 系统失败）
-非0 adapter 自身故障（解析失败、CLI 不存在）
+# Exit codes
+0  normal completion (ok may be true/false; JSON.error distinguishes business failure vs system failure)
+non-0  adapter itself failed (parse error, CLI not found)
 ```
 
-**adapter 必须**：
+**Adapters must**:
 
-1. 提示词走 stdin / 文件，禁止内联拼命令行。
-2. 解析 backend 输出后**先检错再用结果**（`.is_error` / `.error`）。
-3. 原始调用 JSON 落盘 `<project>/.harness/logs/raw/<ts>-<task_id>.json`。
-4. `--output-format json` / `--json` 必须传；NDJSON（Codex）由 adapter 内部聚合。
-5. 续接：`ADAPTER_SESSION_ID` 非空时调 `--resume` / `--last`；否则首发。
-6. Codex 特别约束：检测同 worktree 已有 Codex 进程则等待（flock）。
+1. Prompts go via stdin / file; never inline into command line.
+2. After parsing backend output, **check errors before using results** (`.is_error` / `.error`).
+3. Write raw call JSON to disk at `<project>/.harness/logs/raw/<ts>-<task_id>.json`.
+4. `--output-format json` / `--json` must be passed; NDJSON (Codex) is aggregated internally by the adapter.
+5. Resumption: when `ADAPTER_SESSION_ID` is non-empty, call with `--resume` / `--last`; otherwise first call.
+6. Codex special constraint: if a Codex process already exists for the same worktree, wait (flock).
 
-接入新 backend 见 [adapter-contract.md](adapter-contract.md)。
+For onboarding new backends, see [adapter-contract.md](adapter-contract.md).
 
 ---
 
-## 5. SQLite 封装（M5）
+## 5. SQLite Wrapper (M5)
 
-### 5.1 `src/harness/db.py` 公共函数（Python）
+### 5.1 `src/harness/db.py` Public Functions (Python)
 
-bash 入口通过 `harness-db <subcommand>` console script 调用（见 `src/harness/cli/db_cli.py`）。Python 调用方直接 `from harness import db`。
+bash entry points call via `harness-db <subcommand>` console script (see `src/harness/cli/db_cli.py`). Python callers use `from harness import db` directly.
 
 ```python
-db.init(schema_sql_path)                        # 跑 schema/harness.sql + 增量 migrations，幂等
-db.claim(worker_id)                             # 原子 UPDATE...RETURNING → (task_id, spec_path) 或 None
-db.transition(task_id, to_state, reason="")    # 写 tasks.status + transitions（BEGIN IMMEDIATE）
+db.init(schema_sql_path)                        # run schema/harness.sql + incremental migrations, idempotent
+db.claim(worker_id)                             # atomic UPDATE...RETURNING → (task_id, spec_path) or None
+db.transition(task_id, to_state, reason="")    # write tasks.status + transitions (BEGIN IMMEDIATE)
 db.log_call(task_id, worker_id, backend, sid, exit_code, cost, turns, duration_ms, files_changed)
 db.register_session(task_id, backend, session_id)
-db.session_touch(task_id, backend)              # 刷新 last_seen=now
-db.query_orphans(threshold_min, exclude_ids=[]) # 列出崩溃残留 transient 状态任务
-db.today_cost()                                 # 今日累计 USD（float）
-db.query_status(task_id=None)                   # 任务列表
+db.session_touch(task_id, backend)              # refresh last_seen=now
+db.query_orphans(threshold_min, exclude_ids=[]) # list tasks stuck in transient states from crashes
+db.today_cost()                                 # today's cumulative USD (float)
+db.query_status(task_id=None)                   # task list
 db.event_write / event_query_pending / event_mark_delivered
 ```
 
-**实现要求**：
+**Implementation requirements**:
 
-- 每次调用一个短连接（`with _connect() as c:`），无长连。
-- 必须 `PRAGMA busy_timeout=5000` 与 `journal_mode=WAL`（建库时一次性设）。
-- 启动校验 SQLite ≥ 3.35（`RETURNING` 依赖）。
-- 多写事务用 `BEGIN IMMEDIATE`（让 busy_timeout 在写锁竞争下生效）。
-- 比较时间戳用 `strftime('%s', ...)`，不要 string `<`（ISO-8601 的 `T`/`Z` 不与 SQL `datetime('now')` 同格式）。
+- One short connection per call (`with _connect() as c:`); no long connections.
+- Must use `PRAGMA busy_timeout=5000` and `journal_mode=WAL` (set once at database creation).
+- Validate SQLite ≥ 3.35 at startup (`RETURNING` dependency).
+- Multi-write transactions use `BEGIN IMMEDIATE` (so busy_timeout kicks in under write lock contention).
+- Compare timestamps with `strftime('%s', ...)`; don't use string `<` (ISO-8601's `T`/`Z` doesn't match SQL `datetime('now')` format).
 
-### 5.2 文件层（M6）
+### 5.2 File Layer (M6)
 
-由 worker 进程写、编排器摄取：
+Written by worker processes, ingested by orchestrator:
 
-| 文件 | 写者 | 触发编排器动作 |
-|------|------|---------------|
-| `workers/<id>/status.json` | worker | 每次摄取后写 `sessions.last_seen`；若 `status==done` 触发 WORKING→GATING |
-| `workers/<id>/guidance.json` | worker | `blocking==true` 触发 WORKING→BLOCKED + notify |
-| `inbox/<id>.answer` | 人/协调者 | 触发 BLOCKED→WORKING，answer 注入下一轮 prompt |
+| File | Writer | Orchestrator action triggered |
+|------|--------|------------------------------|
+| `workers/<id>/status.json` | worker | Each ingest refreshes `sessions.last_seen`; if `status==done` triggers WORKING→GATING |
+| `workers/<id>/guidance.json` | worker | `blocking==true` triggers WORKING→BLOCKED + notify |
+| `inbox/<id>.answer` | human/coordinator | Triggers BLOCKED→WORKING, answer injected into next prompt |
 
-文件写入（`src/harness/atomic_write.py`）：
+File writing (`src/harness/atomic_write.py`):
 
 ```python
 write_json(path, obj)                       # tmp + rename
@@ -226,43 +226,43 @@ write_text(path, content)                   # tmp + rename
 
 ---
 
-## 6. 校验门（M7）
+## 6. Validation Gate (M7)
 
 ### 6.1 `lib/gate.sh`
 
 ```bash
 gate.sh <worktree_dir> [--skip-cross-review]
 
-# 退出码
-0  全绿
-非0 至少一步失败
+# Exit codes
+0  all green
+non-0  at least one step failed
 
-# 副作用
-<worktree_dir>/.gate-report.json   # 结构化报告
+# Side effects
+<worktree_dir>/.gate-report.json   # structured report
 ```
 
-`.gate-report.json` schema 见 [data-schemas.md](data-schemas.md#gate-report)。
+`.gate-report.json` schema see [data-schemas.md](data-schemas.md#gate-report).
 
-### 6.2 步骤回调（项目 AGENTS.md 中声明命令）
+### 6.2 Step Callbacks (commands declared in project AGENTS.md)
 
 ```yaml
 gate:
-  build: tsc --noEmit          # 跳过则填空字符串
+  build: tsc --noEmit          # skip by setting to empty string
   lint: eslint .
   test: npm test
-  diff_audit: harness diff-audit <spec>  # 编排器提供
+  diff_audit: harness diff-audit <spec>  # provided by orchestrator
   cross_review:
     enabled: true
     reviewer: codex             # codex / opencode / none
 ```
 
-未声明的步骤跳过并在 report 中标记 `skipped`。
+Undeclared steps are skipped and marked `skipped` in the report.
 
 ---
 
-## 7. 安全 Hooks（M8）
+## 7. Security Hooks (M8)
 
-部署到项目 `.claude/settings.json`：
+Deployed to project `.claude/settings.json`:
 
 ```json
 {
@@ -280,27 +280,27 @@ gate:
 }
 ```
 
-### 7.1 `hooks/pre_tool_use.sh` 契约
+### 7.1 `hooks/pre_tool_use.sh` Contract
 
-- stdin: Claude Code hook 标准输入 JSON（含 `tool_input.command` 等）。
-- 行为：匹配危险模式 → stderr 写原因 → `exit 2`。
-- **禁止**：写 stdout（模型收不到）、HTTP 调用（网络抖动旁路安全门）。
-- 初始拦截集见设计 §7.5。
+- stdin: Claude Code hook standard input JSON (containing `tool_input.command` etc.).
+- Behavior: match dangerous pattern → write reason to stderr → `exit 2`.
+- **Prohibited**: writing to stdout (model doesn't receive it), HTTP calls (network jitter bypasses security gate).
+- Initial interception set: see design §7.5.
 
-### 7.2 `hooks/stop.sh` 契约
+### 7.2 `hooks/stop.sh` Contract
 
-- 输入：Claude Code Stop hook stdin。
-- 行为：调 `gate.sh --quick`（仅 build + lint，不跑全量 test）；任一失败 → stderr 写未完成项 → `exit 2` 或输出 `{"decision":"block","reason":"..."}`。
-- 用途：防止 worker 在未完成时退出 — 「任务内自驱动」由此内建。
+- Input: Claude Code Stop hook stdin.
+- Behavior: calls `gate.sh --quick` (build + lint only, not full test suite); any failure → write incomplete items to stderr → `exit 2` or output `{"decision":"block","reason":"..."}`.
+- Purpose: prevents workers from exiting before completion — "intra-task self-driving" is built in this way.
 
-### 7.3 `hooks/notification.sh` 契约
+### 7.3 `hooks/notification.sh` Contract
 
-- 输入：`hooks/notification.sh <event_type> <task_id> <event_json_path>`（由 `harness.notify.notify` fire-and-forget 调用）。
-- 行为：macOS 桌面通知（osascript） + 写 `.harness/logs/notify.log`。
+- Input: `hooks/notification.sh <event_type> <task_id> <event_json_path>` (called fire-and-forget by `harness.notify.notify`).
+- Behavior: macOS desktop notification (osascript) + writes to `.harness/logs/notify.log`.
 
 ---
 
-## 8. 通知路由（M9）
+## 8. Notification Routing (M9)
 
 ### 8.1 `src/harness/notify.py`
 
@@ -310,51 +310,51 @@ notify(event_type: str, task_id: Optional[str], payload: dict) -> int
 # event_type: needs_decision | task_completed | task_failed | budget_exceeded
 ```
 
-- 写入 `events` 表 + `.harness/events/<ts>-<event_type>-<task_id>.json`。
-- fire-and-forget 调 `hooks/notification.sh`（桌面通知 + notify.log）。
-- 协调者经 `harness events pending` / `events ack` 消费（pull-on-re-engagement，见 coordinator.md §2.2）。
+- Writes to `events` table + `.harness/events/<ts>-<event_type>-<task_id>.json`.
+- Fire-and-forget calls `hooks/notification.sh` (desktop notification + notify.log).
+- Coordinator consumes via `harness events pending` / `events ack` (pull-on-re-engagement, see coordinator.md §2.2).
 
 ---
 
-## 9. 成本闸（M10）
+## 9. Cost Gate (M10)
 
 ### 9.1 `src/harness/budget.py`
 
 ```python
 from harness.budget import under_limit, today_cost, daily_limit
-under_limit() -> bool           # True = 仍可派
-today_cost() -> float           # 今日累计 USD
-daily_limit() -> float          # 从 ~/.config/harness/config 读，默 10
+under_limit() -> bool           # True = can still dispatch
+today_cost() -> float           # today's cumulative USD
+daily_limit() -> float          # read from ~/.config/harness/config, default 10
 ```
 
-- 日预算从 `~/.config/harness/config` 读取，超限 `notify budget_exceeded`。
-- 不杀已运行 worker（防止丢工作）；只停 `db_claim` 新任务。
+- Daily budget read from `~/.config/harness/config`; when exceeded, `notify budget_exceeded`.
+- Does not kill running workers (prevents lost work); only stops `db_claim` for new tasks.
 
 ---
 
-## 10. 项目初始化（M11）
+## 10. Project Initialization (M11)
 
-### 10.1 `bin/harness init` 步骤
+### 10.1 `bin/harness init` Steps
 
-按序：
+In order:
 
-1. 校验当前目录是 git repo 且无 `.harness/`（防覆盖）。
-2. 渲染 `templates/AGENTS.md.tmpl` → `<project>/AGENTS.md`（项目名、gate 命令占位）。
-3. `ln -s AGENTS.md CLAUDE.md`。
-4. 合并 `templates/settings.json.tmpl` 到 `<project>/.claude/settings.json`（已存在则提示手动 merge）。
-5. 追加 `templates/gitignore-fragment` 到 `.gitignore`。
-6. `mkdir -p .harness/{workers,inbox,events,logs/raw} specs`。
-7. `db_init .harness/harness.db`。
-8. 追加项目路径到 `~/.config/harness/projects.list`。
+1. Validate current directory is a git repo and has no `.harness/` (prevent overwrite).
+2. Render `templates/AGENTS.md.tmpl` → `<project>/AGENTS.md` (project name, gate command placeholders).
+3. `ln -s AGENTS.md CLAUDE.md`.
+4. Merge `templates/settings.json.tmpl` into `<project>/.claude/settings.json` (if exists, prompt for manual merge).
+5. Append `templates/gitignore-fragment` to `.gitignore`.
+6. `mkdir -p .harness/{workers,inbox,events,logs/raw} specs`.
+7. `db_init .harness/harness.db`.
+8. Append project path to `~/.config/harness/projects.list`.
 
-幂等：再次运行 → 仅修复缺失项，不覆盖人工修改的 AGENTS.md / settings.json。
+Idempotent: running again → only repairs missing items; does not overwrite manually edited AGENTS.md / settings.json.
 
 ---
 
-## 11. 跨模块触发关系图
+## 11. Cross-Module Trigger Diagram
 
 ```
-人/协调者                           worker                       编排器
+human/coordinator                  worker                       orchestrator
     │                                 │                            │
     │ harness-task add                │                            │
     └─────────────────────────────────┼────tasks INSERT───────────▶│
