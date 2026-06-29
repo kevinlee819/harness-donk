@@ -121,6 +121,7 @@ spec 要求：
 | ③-watchdog-持续卡死 | event payload 含 `"reason": "persistent_stuck"` | 同 ③-连锁 的处理：根任务失败导致下游卡死，重试根任务。但已经被 watchdog 重发过 → 说明协调者上次没处理或重试也失败了。**先看 `harness-task history <root_id>`** 判断 retry 是不是已经徒劳，再决定：a) 已 retry 多次仍失败 → 把失败摘要给用户、问要不要改 spec/放弃，**不要再傻乎乎地 retry**；b) 没 retry 过 → retry 一次 |
 | ③-watchdog-编排器挂了 | event payload 含 `"reason": "orchestrator_down"` | 严重事件——执行平面挂了，没人推进任务。**不要试图自己重启**（不归你管，且你不能调 tmux）。**立即告诉用户**："执行平面似乎已停止（X 个任务在运行态但 Y 分钟没更新），请切到 orchestrator 窗口（Ctrl-B 1）看错误信息或重新启动 `harness-infi`"；然后 ack 事件 |
 | ③-watchdog-事件堆积 | event payload 含 `"reason": "events_pending_unread"` | 表示协调者自己有事件没消费——按 §2.2 流程把 `harness events pending` 里**所有**事件依次处理掉、ack 掉。处理完这条 nudge 也一并 ack |
+| ③-空合并 | event payload 含 `"reason": "no_commits"` | worker 报告 gate 通过但实际没产出任何 commit（典型原因：AGENTS.md 的 build/lint/test 全是空字符串，gate 在空 worktree 上 trivially 通过）。**worktree 和分支保留下来便于排障**。立刻告诉用户：① 任务名 + 为什么是空合并的猜测（多半是 gate 没配好）；② 建议先派一个修 gate 的任务（参考 §0 情形 C），再 `harness-task retry <id>` 重新跑这个任务 |
 
 ### 2.2 事件**消费模式**：pull-on-re-engagement
 

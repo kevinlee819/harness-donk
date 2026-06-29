@@ -141,6 +141,39 @@ class HarnessTaskTestCase(unittest.TestCase):
         self.assertIn("failed", r.stdout)
         self.assertIn("user_cancelled", r.stdout)
 
+    # ── retry ──
+    def test_retry_failed_reports_ok_and_prior_status(self):
+        _run(["add", "--id", "T-rt-f"], cwd=self.proj, stdin="x")
+        _run(["cancel", "T-rt-f"], cwd=self.proj)  # → failed
+        r = _run(["retry", "T-rt-f"], cwd=self.proj)
+        self.assertEqual(0, r.returncode, msg=r.stderr)
+        out = json.loads(r.stdout.strip())
+        self.assertTrue(out["ok"])
+        self.assertTrue(out["queued"])
+        self.assertEqual("failed", out["prior_status"])
+        # task is back in queue
+        q = _run(["query", "--task", "T-rt-f"], cwd=self.proj)
+        self.assertIn("queued", q.stdout)
+
+    def test_retry_non_retryable_reports_error_with_status(self):
+        """Regression: previously cmd_retry blindly reported queued:true even
+        when the UPDATE matched zero rows. Now it must return non-zero rc and
+        surface the current status so the coordinator can react."""
+        _run(["add", "--id", "T-rt-q"], cwd=self.proj, stdin="x")  # stays queued
+        r = _run(["retry", "T-rt-q"], cwd=self.proj)
+        self.assertNotEqual(0, r.returncode)
+        out = json.loads(r.stdout.strip())
+        self.assertFalse(out["ok"])
+        self.assertEqual("not_retryable", out["error"])
+        self.assertEqual("queued", out["current_status"])
+
+    def test_retry_nonexistent_reports_error(self):
+        r = _run(["retry", "T-DOES-NOT-EXIST"], cwd=self.proj)
+        self.assertNotEqual(0, r.returncode)
+        out = json.loads(r.stdout.strip())
+        self.assertFalse(out["ok"])
+        self.assertEqual("no_such_task", out["error"])
+
     # ── uninitialized ──
     def test_uninitialized_fails(self):
         d = tempfile.mkdtemp()

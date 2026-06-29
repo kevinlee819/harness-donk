@@ -119,10 +119,39 @@ def cmd_cancel(args: argparse.Namespace) -> int:
 
 
 def cmd_retry(args: argparse.Namespace) -> int:
-    db.retry_task(args.task_id)
-    json.dump({"ok": True, "task_id": args.task_id, "queued": True}, sys.stdout)
+    prior = db.retry_task(args.task_id)
+    if prior is not None:
+        json.dump(
+            {"ok": True, "task_id": args.task_id, "queued": True, "prior_status": prior},
+            sys.stdout,
+        )
+        sys.stdout.write("\n")
+        return 0
+    # No-op: either task doesn't exist or current state isn't retryable.
+    rows = db.query_status(args.task_id)
+    if not rows:
+        json.dump(
+            {"ok": False, "task_id": args.task_id, "error": "no_such_task"},
+            sys.stdout,
+        )
+        sys.stdout.write("\n")
+        return 1
+    current = rows[0][1]
+    json.dump(
+        {
+            "ok": False,
+            "task_id": args.task_id,
+            "error": "not_retryable",
+            "current_status": current,
+            "message": (
+                f"retry only resets failed/merged tasks; current status is "
+                f"{current!r} (use cancel + add to abort and recreate)"
+            ),
+        },
+        sys.stdout,
+    )
     sys.stdout.write("\n")
-    return 0
+    return 1
 
 
 def cmd_answer(args: argparse.Namespace) -> int:

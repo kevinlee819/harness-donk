@@ -525,20 +525,49 @@ def query_stuck_queued() -> list[str]:
     return [r[0] for r in rows]
 
 
-def retry_task(task_id: str) -> None:
-    """Reset a failed task to queued for re-dispatch."""
+def retry_task(task_id: str) -> Optional[str]:
+    """Reset a task to queued for re-dispatch. Returns prior_status, or None on no-op.
+
+    Accepts `failed` and `merged` source states:
+      - `failed`: the obvious "fix and retry" case
+      - `merged`: needed when a prior run produced a "ghost merge" (worker
+        produced no commits but task was marked merged). After [no_commits]
+        defense is in place these are rare, but legitimate iteration ("redo
+        T-XXX") should still work.
+
+    Returns None if the task doesn't exist or is in a non-retryable state
+    (queued/dispatched/working/gating/blocked) — caller can distinguish via
+    the returned value vs. checking task existence.
+    """
     now = _now()
     with _connect() as c:
-        c.execute(
-            "UPDATE tasks SET status='queued', worker_id=NULL, branch=NULL, updated=? "
-            "WHERE id=? AND status='failed'",
-            (now, task_id),
-        )
-        c.execute(
-            "INSERT INTO transitions(task_id, from_state, to_state, reason, ts) "
-            "VALUES (?,?,?,?,?)",
-            (task_id, "failed", "queued", "manual_retry", now),
-        )
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            row = c.execute(
+                "SELECT status FROM tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            if row is None:
+                c.execute("ROLLBACK")
+                return None
+            prior = row[0]
+            if prior not in ("failed", "merged"):
+                c.execute("ROLLBACK")
+                return None
+            c.execute(
+                "UPDATE tasks SET status='queued', worker_id=NULL, branch=NULL, "
+                "updated=? WHERE id=?",
+                (now, task_id),
+            )
+            c.execute(
+                "INSERT INTO transitions(task_id, from_state, to_state, reason, ts) "
+                "VALUES (?,?,?,?,?)",
+                (task_id, prior, "queued", "manual_retry", now),
+            )
+            c.execute("COMMIT")
+            return prior
+        except Exception:
+            c.execute("ROLLBACK")
+            raise
 
 
 def gen_task_id() -> str:

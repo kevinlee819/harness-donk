@@ -282,6 +282,56 @@ class DbTestCase(unittest.TestCase):
         ids = [r[0] for r in rows]
         self.assertEqual(["T-OLD-BLK"], ids, "only T-OLD-BLK is overdue")
 
+    # ── retry_task ──
+    def test_retry_failed_task_returns_prior_status(self):
+        db.add_task("T-F", "f.md")
+        db.transition("T-F", "failed", "boom")
+        prior = db.retry_task("T-F")
+        self.assertEqual("failed", prior)
+        rows = db.query_status("T-F")
+        self.assertEqual("queued", rows[0][1])
+        # transition row is recorded with correct from_state
+        hist = db.query_history("T-F")
+        last = hist[-1]
+        self.assertEqual(("failed", "queued", "manual_retry"), (last[1], last[2], last[3]))
+
+    def test_retry_merged_task_works(self):
+        """Allow retrying merged tasks (ghost-merge recovery + iteration)."""
+        db.add_task("T-M", "m.md")
+        db.transition("T-M", "merged", "ok")
+        prior = db.retry_task("T-M")
+        self.assertEqual("merged", prior)
+        self.assertEqual("queued", db.query_status("T-M")[0][1])
+
+    def test_retry_clears_worker_and_branch(self):
+        db.add_task("T-WB", "wb.md")
+        db.transition("T-WB", "failed", "x")
+        db.set_branch("T-WB", "harness/T-WB")
+        # simulate worker_id set
+        import sqlite3
+        with sqlite3.connect(str(self.db_path)) as c:
+            c.execute("UPDATE tasks SET worker_id='w1' WHERE id='T-WB'")
+        db.retry_task("T-WB")
+        rows = db.query_status("T-WB")
+        self.assertEqual("queued", rows[0][1])
+        self.assertEqual("", rows[0][2])  # worker_id cleared (TSV "-" sentinel handled by db_cli, not db)
+        self.assertEqual("", rows[0][3])  # branch cleared
+
+    def test_retry_nonexistent_returns_none(self):
+        self.assertIsNone(db.retry_task("T-NOPE"))
+
+    def test_retry_non_retryable_state_returns_none(self):
+        """retry on queued/dispatched/working/etc must NOT change state and must
+        NOT insert a phantom transition row (regression test for old bug where
+        cmd_retry blindly inserted transitions/manual_retry regardless of result)."""
+        db.add_task("T-Q", "q.md")  # starts as queued
+        prior = db.retry_task("T-Q")
+        self.assertIsNone(prior)
+        # status unchanged
+        self.assertEqual("queued", db.query_status("T-Q")[0][1])
+        # no phantom transition row
+        self.assertEqual([], db.query_history("T-Q"))
+
     # ── migration runner drill ──
     def test_apply_migrations_runs_in_order(self):
         """演练：模拟 schema 从 v1 → v3 的迁移路径。

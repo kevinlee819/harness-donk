@@ -49,20 +49,18 @@ test_hook_writes_local_notify_log_for_needs_decision() {
   assert_contains "T-nh1" "$content"
 }
 
-test_hook_skipped_for_task_completed() {
+test_hook_writes_for_task_completed() {
   _setup
   "$HARNESS_PYTHON" -m harness.cli.harness_task add --id T-nh2 <<< "x" >/dev/null
   notify task_completed "T-nh2" '{"branch":"harness/T-nh2"}' >/dev/null
 
-  # task_completed 是「静默」事件，不写 notify.log
-  sleep 0.5
+  # task_completed 必须写 log + 弹桌面通知 —— 协调者会话不能自唤醒，
+  # 桌面 toast 是把用户拉回对话的唯一信号（不再是「静默」事件）。
   local log="$PROJ/.harness/logs/notify.log"
-  if [[ -f "$log" ]]; then
-    if grep -q "task_completed" "$log" 2>/dev/null; then
-      echo "task_completed unexpectedly logged" >&2
-      return 1
-    fi
-  fi
+  _wait_log "$log" "task_completed" || { cat "$log" 2>/dev/null >&2; return 1; }
+  local content; content=$(cat "$log")
+  assert_contains "T-nh2" "$content"
+  assert_contains "harness/T-nh2" "$content"
 }
 
 test_hook_writes_for_task_failed() {

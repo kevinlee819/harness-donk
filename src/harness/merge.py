@@ -41,7 +41,53 @@ def do_merge(req: MergeRequest, project_dir: Path, backend: str, harness_home: P
         capture_output=True, text=True,
     )
     main_branch = main_branch_proc.stdout.strip() or "main"
-    log.info("merging %s into %s", req.branch, main_branch)
+
+    # Pre-merge sanity: refuse "ghost merges". `git merge --no-ff` on a branch
+    # equal to (or ancestor of) main returns 0 with no merge commit — the task
+    # would be marked merged with no code change. This typically happens when
+    # the worker's agent didn't commit anything but gate was misconfigured
+    # (empty test/lint/build) so gate trivially passed.
+    ahead_proc = subprocess.run(
+        ["git", "-C", str(project_dir), "rev-list", "--count",
+         f"{main_branch}..{req.branch}"],
+        capture_output=True, text=True,
+    )
+    try:
+        n_ahead = int((ahead_proc.stdout or "0").strip() or "0")
+    except ValueError:
+        n_ahead = 0
+    if n_ahead == 0:
+        log.error("merge refused: %s has no commits ahead of %s (worker produced no commits)",
+                  req.branch, main_branch)
+        db.transition(req.task_id, "failed", "no_commits")
+        worker_status_path = project_dir / ".harness" / "workers" / req.worker_id / "status.json"
+        write_json(worker_status_path, {
+            "schema_version": 1,
+            "worker_id": req.worker_id,
+            "backend": backend,
+            "session_id": req.session_id,
+            "task_id": req.task_id,
+            "status": "error",
+            "branch": req.branch,
+            "progress": "no_commits",
+            "turns": 0,
+            "files_changed": 0,
+            "blockers": [],
+            "updated": _now_iso(),
+        })
+        notify("task_failed", req.task_id, {
+            "reason": "no_commits",
+            "branch": req.branch,
+            "message": (
+                "worker reported gate-pass but produced no commits — "
+                "likely a misconfigured gate (empty build/lint/test) that "
+                "trivially passes on an empty worktree"
+            ),
+        })
+        # Keep worktree + branch around for debugging (don't destroy evidence).
+        return False
+
+    log.info("merging %s into %s (%d commits ahead)", req.branch, main_branch, n_ahead)
 
     merge_proc = subprocess.run(
         ["git", "-C", str(project_dir), "merge", "--no-ff", req.branch,
