@@ -318,6 +318,14 @@ class WorkerThread(threading.Thread):
                 capture_output=True, text=True,
             )
 
+        # Prune stale .git/worktrees/ registrations left by shutil.rmtree fallback
+        # or previous forced removals; otherwise 'worktree add' reports "already
+        # registered" even when the directory no longer exists.
+        subprocess.run(
+            ["git", "-C", str(j.project_dir), "worktree", "prune"],
+            capture_output=True, text=True,
+        )
+
         r = subprocess.run(
             ["git", "-C", str(j.project_dir), "worktree", "add", "-B", branch, str(worktree)],
             capture_output=True, text=True,

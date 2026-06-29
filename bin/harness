@@ -618,6 +618,21 @@ cmd_events() {
   esac
 }
 
+cmd_orphans() {
+  # 列出当前孤儿任务（working/dispatched/gating 且超过阈值未更新）。
+  # 协调者可用此命令检测 + 自动重试。
+  # 用法：harness orphans [threshold_minutes]  默认 5 分钟
+  local cwd; cwd=$(pwd)
+  local HARNESS_DB_PATH="$cwd/.harness/harness.db"
+  [[ ! -f "$HARNESS_DB_PATH" ]] && { echo "not initialized" >&2; exit 1; }
+  export HARNESS_DB="$HARNESS_DB_PATH"
+  local threshold="${1:-5}"
+  _db query-orphans "$threshold" | while IFS=$'\t' read -r tid stat retries reds updated; do
+    printf "%s\tstatus=%s\tretries=%s\tupdated=%s\n" \
+      "${tid:--}" "${stat:--}" "${retries:--}" "${updated:--}"
+  done
+}
+
 cmd_watch_panel() {
   # Live status panel in the bottom split-pane. Fast + silent on any error.
   local cwd; cwd=$(pwd)
@@ -729,6 +744,7 @@ Commands:
                           任务列表 / 单任务详情 / 迁移史
   events pending          列出待处理事件（needs_decision / failed / completed / budget_exceeded）
   events ack <eid>...     标记事件已交付（避免协调者重复报告）
+  orphans [minutes]       列出孤儿任务（working/dispatched/gating 超过 N 分钟无更新，默认 5）
   backup                  sqlite3 .backup 落到 .harness/backups/
   run-once [--mock]       跑一轮编排器（处理一个任务后退出）
   attach                  attach 到协调者 tmux 会话（无参）
@@ -750,6 +766,7 @@ case "$cmd" in
   doctor) cmd_doctor "$@" ;;
   status) cmd_status "$@" ;;
   events) cmd_events "$@" ;;
+  orphans) cmd_orphans "$@" ;;
   backup) cmd_backup "$@" ;;
   run-once) cmd_run_once "$@" ;;
   attach) cmd_attach "$@" ;;

@@ -16,7 +16,8 @@
 **在回应用户的任何消息之前**，先做：
 
 1. 跑 `harness status` 查看当前任务状态
-2. 检查 `specs/initial.md` 是否存在
+2. 跑 `harness orphans` 检查孤儿任务（见情形 D）
+3. 检查 `specs/initial.md` 是否存在
 
 ### 情形 A：`specs/initial.md` 存在，且当前没有任何任务
 
@@ -63,6 +64,30 @@ spec 要求：
   - 在 worktree 中实际运行这些命令验证可行
   - 提交 AGENTS.md 改动
 ```
+
+### 情形 D：孤儿任务（自动自愈）
+
+`harness orphans` 有输出时（任务在 working/dispatched/gating 状态超过 5 分钟），意味着：
+
+- worker 线程意外崩溃而没有更新任务状态，**或**
+- orchestrator 刚重启，旧 in-flight 任务的线程已经消失
+
+**不要询问用户，直接自愈**：
+
+```
+对 harness orphans 返回的每个 task_id：
+  harness-task retry <task_id>
+```
+
+然后用一句话告知用户（不要列详情，不要等确认）：
+> "发现 T-XXX 僵住（worker 已退出但任务未更新），已自动重新投递。"
+
+**注意**：
+
+- Workers 现在是 orchestrator 进程里的 **Python 线程**，不是独立的 tmux pane。
+  不要通过查找 tmux pane 来判断 worker 是否在跑——这会误判。
+- 判断 worker 是否在跑的唯一可靠方式：`harness status` 的任务状态 + `harness orphans`
+- 如果任务刚刚被派发（`updated` 在 1 分钟以内），不算孤儿——`harness orphans 5` 会自动过滤
 
 ---
 

@@ -129,7 +129,7 @@ def _handle_sigint(signum, frame) -> None:
 
 
 def _reap_orphans(cfg: RuntimeConfig) -> None:
-    threshold = int(read_config("dead_worker_threshold_min", "10"))
+    threshold = int(read_config("dead_worker_threshold_min", "5"))
     max_red = int(os.environ.get("HARNESS_MAX_REDISPATCHES", "2"))
     # Exclude both: actively-running workers' tasks AND tasks awaiting merge.
     # The second set matters because workers exit immediately after posting
