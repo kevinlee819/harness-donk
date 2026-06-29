@@ -37,7 +37,15 @@ cmd_init() {
     *)      reviewer="codex" ;;   # 未知 backend 默认 codex 作 reviewer
   esac
 
-  [[ ! -d "$cwd/.git" ]] && { echo "not a git repo: $cwd" >&2; exit 1; }
+  if [[ ! -d "$cwd/.git" ]]; then
+    echo "error: not a git repo: $cwd" >&2
+    echo "" >&2
+    echo "harness requires a git repository. To set one up:" >&2
+    echo "  git init" >&2
+    echo "  git commit --allow-empty -m 'init'   # or: add a file first" >&2
+    echo "  harness init" >&2
+    exit 1
+  fi
   if [[ -f "$cwd/.harness/harness.db" ]]; then
     echo "already initialized" >&2; return 0
   fi
