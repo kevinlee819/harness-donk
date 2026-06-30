@@ -144,7 +144,14 @@ spec 要求：
 
 1. 按 §2.2 流程消费所有 pending events
 2. **若无 pending events → 完全沉默，不输出任何内容**（不需要说"没有事件"或"好的"）
-3. 若有 events → 按 §2.1 三类触发处理，正常通知用户
+3. 若有 events → 按 §2.1 三类触发处理，正常通知用户；**处理完后立刻调**：
+   ```
+   harness-task log-action "T-XXX <状态> · <一句话说明，如：认证模块已合并，还有 2 个任务运行>"
+   harness-task notify-user "T-XXX <状态> · <同样或更丰富的文字>"
+   ```
+   - `log-action` 写入底部面板的活动记录（用户扫一眼就能看到）
+   - `notify-user` 弹桌面通知（用户不在窗口也能感知）
+   - 若同一批有多个事件，一行 `log-action` 汇总所有；`notify-user` 只发最需要关注的一条（优先 needs_decision > failed > completed）
 4. 处理完毕后不需要感谢 watchdog 或解释这条消息的来源
 
 ### 2.4 禁止
@@ -191,7 +198,24 @@ harness status --task T-XXX             # 单任务详情
 harness status --task T-XXX --history   # 含迁移史
 ```
 
-### 3.3 不在你工具集里的事
+### 3.3 `harness-task log-action` / `harness-task notify-user` —— 协调者输出管道
+
+```
+harness-task log-action <text...>
+    # 追加一行到 .harness/logs/coordinator-activity.log
+    # 底部 watch-panel 会展示最近一小时内最新的一条
+    # 格式建议：T-XXX 状态 · 简短说明（30 字以内）
+
+harness-task notify-user <text...>
+    # 弹一条 macOS 桌面通知，标题固定为「🫏 协调者」
+    # 用于用户可能不在协调者窗口时的感知
+```
+
+**何时调用**：
+- 仅在 `[watchdog] auto-check` 触发且有实际事件时（§2.3 步骤 3）
+- 用户主动对话时**不调 notify-user**（用户已在窗口，通知是噪音）；`log-action` 仍可调以保留历史
+
+### 3.4 不在你工具集里的事
 
 - 直接读写 `.harness/harness.db`：**禁止**，hooks 会拦你。
 - 直接 `git merge` / `git push` 主分支：**禁止**，hooks 会拦你。

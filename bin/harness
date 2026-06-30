@@ -758,6 +758,24 @@ cmd_watch_panel() {
       printf "  ${DIM}↑ tell Claude what you want to build${R}\n"
     fi
   fi
+
+  # ── coordinator last action (bottom strip) ────────────────
+  local act_log="$cwd/.harness/logs/coordinator-activity.log"
+  if [[ -f "$act_log" ]]; then
+    local last_line ts_str ts_epoch now_epoch age_s act_text
+    last_line=$(tail -1 "$act_log" 2>/dev/null)
+    if [[ -n "$last_line" ]]; then
+      ts_str=$(awk '{print $1}' <<< "$last_line")
+      ts_epoch=$(date -j -u -f "%Y-%m-%dT%H:%M:%SZ" "$ts_str" +%s 2>/dev/null || echo 0)
+      now_epoch=$(date +%s)
+      age_s=$(( now_epoch - ts_epoch ))
+      if (( age_s < 3600 )); then  # show entries within the last hour
+        act_text=$(cut -c22- <<< "$last_line" | cut -c1-$(( W - 8 )))
+        printf "${DIM}%${W}s${R}\n" '' | tr ' ' '─'
+        printf "  ${DIM}🤖 %s${R}\n" "$act_text"
+      fi
+    fi
+  fi
 }
 
 cmd_statusline() {

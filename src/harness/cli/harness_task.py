@@ -11,6 +11,8 @@ Commands:
   history TASK_ID
   cancel TASK_ID
   answer TASK_ID ANSWER_TEXT
+  log-action TEXT...       append a coordinator activity entry (visible in watch-panel)
+  notify-user TEXT...      send desktop notification with coordinator's analysis
 """
 
 from __future__ import annotations
@@ -19,6 +21,8 @@ import argparse
 import datetime
 import json
 import os
+import platform
+import subprocess
 import sys
 from pathlib import Path
 
@@ -169,6 +173,34 @@ def cmd_answer(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_log_action(args: argparse.Namespace) -> int:
+    """Append a timestamped coordinator activity entry to .harness/logs/coordinator-activity.log."""
+    text = " ".join(args.text)
+    log_dir = Path.cwd() / ".harness" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_file = log_dir / "coordinator-activity.log"
+    with open(log_file, "a") as f:
+        f.write(f"{_now_iso()}  {text}\n")
+    json.dump({"ok": True}, sys.stdout)
+    sys.stdout.write("\n")
+    return 0
+
+
+def cmd_notify_user(args: argparse.Namespace) -> int:
+    """Send a desktop notification containing the coordinator's analysis text."""
+    text = " ".join(args.text)
+    if platform.system() == "Darwin":
+        esc = text.replace("\\", "\\\\").replace('"', '\\"')
+        subprocess.Popen(
+            ["osascript", "-e", f'display notification "{esc}" with title "🫏 协调者"'],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    json.dump({"ok": True}, sys.stdout)
+    sys.stdout.write("\n")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="harness-task")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -201,6 +233,14 @@ def build_parser() -> argparse.ArgumentParser:
     r = sub.add_parser("retry")
     r.add_argument("task_id")
     r.set_defaults(func=cmd_retry)
+
+    la = sub.add_parser("log-action")
+    la.add_argument("text", nargs="+")
+    la.set_defaults(func=cmd_log_action)
+
+    nu = sub.add_parser("notify-user")
+    nu.add_argument("text", nargs="+")
+    nu.set_defaults(func=cmd_notify_user)
 
     return p
 
