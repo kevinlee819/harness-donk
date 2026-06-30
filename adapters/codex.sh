@@ -251,14 +251,94 @@ start_ms=$(python3 -c 'import time;print(int(time.time()*1000))')
 
 # Fixture 注入：测试可传 HARNESS_CODEX_EVENTS_FIXTURE=<jsonl 文件> 跳过真 codex 调用，
 # 直接用该文件作为 events 源。仅用于测试解析 + 价目折算管线。
+FATAL_ERR=""
 if [[ -n "${HARNESS_CODEX_EVENTS_FIXTURE:-}" && -f "$HARNESS_CODEX_EVENTS_FIXTURE" ]]; then
   cp "$HARNESS_CODEX_EVENTS_FIXTURE" "$EVENTS"
   EXIT=0
 else
-  set +e
-  timeout "$ADAPTER_TIMEOUT" codex "${_args[@]}" < "$ADAPTER_TASK_FILE" > "$EVENTS" 2>"$ADAPTER_WORKTREE/.adapter.stderr"
-  EXIT=$?
-  set -e
+  # ── 增量进度回写 + 致命错误嗅探 ────────────────────────
+  # codex exec --json 是流式 JSONL；之前是阻塞跑完再解析，期间 status.json 永远停在
+  # "starting" / turns=0（Bug 2），且模型卡在工具错误（如 "stdin is closed for this
+  # session" — Bug 3）时整个进程会无限挂起到 timeout（默认 15 分钟），harness 上层
+  # 看不到任何信号。改成后台跑 + 监视循环：每 2s 数 turn.completed 写回 progress，
+  # 命中已知致命 stderr 模式时直接 kill 并提前退出。
+  : > "$ADAPTER_WORKTREE/.adapter.stderr"
+
+  _status_file=""
+  [[ -n "$ADAPTER_WORKER_DIR" && -f "$ADAPTER_WORKER_DIR/status.json" ]] \
+    && _status_file="$ADAPTER_WORKER_DIR/status.json"
+
+  _update_progress() {
+    # 部分更新 status.json：只动 turns/progress/files_changed/updated，
+    # 其余字段（worker_id, branch, session_id …）由 worker.py 写入并保留。
+    [[ -z "$_status_file" || ! -f "$_status_file" ]] && return 0
+    local turns=$1 stage=$2 fc=$3
+    local tmp="$_status_file.tmp.$$"
+    if jq --argjson t "$turns" --arg s "$stage" --argjson fc "$fc" \
+          --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          '.turns = $t | .progress = $s | .files_changed = $fc | .updated = $ts' \
+          "$_status_file" > "$tmp" 2>/dev/null; then
+      mv "$tmp" "$_status_file"
+    else
+      rm -f "$tmp"
+    fi
+  }
+
+  # 已知致命 stderr 模式 — 命中即提前 kill，避免空转到 timeout。
+  # 一律用固定字符串 grep，不写正则，避免误伤。
+  _CODEX_FATAL_PATTERNS=(
+    "stdin is closed for this session"     # Bug 3: codex 工具调用 stdin 已闭
+  )
+
+  _scan_fatal() {
+    [[ ! -s "$ADAPTER_WORKTREE/.adapter.stderr" ]] && return 1
+    local pat
+    for pat in "${_CODEX_FATAL_PATTERNS[@]}"; do
+      if grep -qF -- "$pat" "$ADAPTER_WORKTREE/.adapter.stderr" 2>/dev/null; then
+        printf '%s' "$pat"
+        return 0
+      fi
+    done
+    return 1
+  }
+
+  codex "${_args[@]}" < "$ADAPTER_TASK_FILE" > "$EVENTS" 2>"$ADAPTER_WORKTREE/.adapter.stderr" &
+  CODEX_PID=$!
+  _start_ts=$(date +%s)
+  EXIT=""
+
+  while kill -0 "$CODEX_PID" 2>/dev/null; do
+    sleep 2
+
+    # (a) 超时（替代外层 `timeout`，因为我们要主动决定何时杀）
+    if (( $(date +%s) - _start_ts >= ADAPTER_TIMEOUT )); then
+      kill -TERM "$CODEX_PID" 2>/dev/null
+      sleep 2
+      kill -KILL "$CODEX_PID" 2>/dev/null
+      EXIT=124
+      break
+    fi
+
+    # (b) 致命 stderr —— 提前 fail，比 timeout 早 ~15 分钟
+    if _hit=$(_scan_fatal); then
+      FATAL_ERR="$_hit"
+      kill -TERM "$CODEX_PID" 2>/dev/null
+      sleep 1
+      kill -KILL "$CODEX_PID" 2>/dev/null
+      EXIT=66
+      break
+    fi
+
+    # (c) 进度回写：Bug 2 修复点
+    cur_turns=$(grep -c '"type":"turn.completed"' "$EVENTS" 2>/dev/null || echo 0)
+    cur_fc=$(_count_files_changed)
+    _update_progress "${cur_turns:-0}" "codex running (turn ${cur_turns:-0})" "${cur_fc:-0}"
+  done
+
+  if [[ -z "$EXIT" ]]; then
+    wait "$CODEX_PID" 2>/dev/null
+    EXIT=$?
+  fi
 fi
 
 end_ms=$(python3 -c 'import time;print(int(time.time()*1000))')
@@ -308,8 +388,12 @@ final_json=$(jq -nc --arg t "$final_text" --arg tid "$thread_id" --argjson turns
 _log_raw "$raw_lines" "$final_json"
 
 if [[ $EXIT -ne 0 ]]; then
-  err_msg=$(tail -c 500 "$ADAPTER_WORKTREE/.adapter.stderr" 2>/dev/null | tr -d '\0')
-  [[ -z "$err_msg" ]] && err_msg="codex exit_$EXIT"
+  err_tail=$(tail -c 500 "$ADAPTER_WORKTREE/.adapter.stderr" 2>/dev/null | tr -d '\0')
+  case "$EXIT" in
+    66)  err_msg="codex fatal: ${FATAL_ERR:-unknown}${err_tail:+ | }${err_tail}" ;;
+    124) err_msg="codex timeout (${ADAPTER_TIMEOUT}s)${err_tail:+ | }${err_tail}" ;;
+    *)   err_msg="${err_tail:-codex exit_$EXIT}" ;;
+  esac
   jq -nc --arg err "$err_msg" --arg sid "$thread_id" --argjson dur "$duration" \
     '{ok:false, session_id:(if $sid=="" then null else $sid end), result:"",
       cost_usd:null, num_turns:null, files_changed:0, duration_ms:$dur, error:$err}'

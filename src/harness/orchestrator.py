@@ -12,6 +12,7 @@ See plan: /Users/kevinlee/.claude/plans/robust-bubbling-iverson.md
 from __future__ import annotations
 
 import datetime
+import json
 import logging
 import os
 import queue
@@ -285,7 +286,21 @@ def run(cfg: RuntimeConfig) -> int:
     _pool = Pool(cfg.max_workers)
     signal.signal(signal.SIGINT, _handle_sigint)
     signal.signal(signal.SIGTERM, _handle_sigint)
-    _stuck_notified: set[str] = set()  # avoid spamming the same stuck task
+
+    # Persist downstream-blocked dedup across orchestrator restarts (Bug 12).
+    # Previously the set was in-memory only, so each restart re-fired
+    # downstream_blocked for every still-blocked task — generating 3+ alerts
+    # per task per hour when the orchestrator was being bounced. We persist
+    # the set of (blocked_id, root_failed_id) pairs we've notified about;
+    # only when a NEW root failure emerges for a blocked task do we re-alert.
+    stuck_state_path = cfg.project_dir / ".harness" / ".stuck-notified.json"
+    _stuck_notified_pairs: set[tuple[str, str]] = set()
+    if stuck_state_path.is_file():
+        try:
+            data = json.loads(stuck_state_path.read_text())
+            _stuck_notified_pairs = {(b, r) for b, r in data.get("pairs", [])}
+        except (json.JSONDecodeError, OSError):
+            pass
 
     adapter_sh = cfg.harness_home / "adapters" / f"{cfg.backend}.sh"
     if not adapter_sh.is_file():
@@ -302,8 +317,19 @@ def run(cfg: RuntimeConfig) -> int:
     _ensure_dirs(cfg)
 
     spawned_any = False
+    heartbeat_path = cfg.project_dir / ".harness" / ".orchestrator-heartbeat"
+
+    def _beat() -> None:
+        # Truthful liveness signal for watchdog. Replaces the old "max(tasks.updated)"
+        # heuristic, which false-alarmed when all tasks were queued-waiting-on-deps
+        # (Bug 9). Plain epoch-seconds; one writer, last-writer-wins is fine.
+        try:
+            heartbeat_path.write_text(str(int(time.time())))
+        except OSError:
+            log.exception("heartbeat write failed")
 
     while True:
+        _beat()
         if _shutdown.is_set() and _pool.busy_count() == 0:
             return 0
 
@@ -345,19 +371,31 @@ def run(cfg: RuntimeConfig) -> int:
         if not _pool.has_work():
             log.info("queue empty (or budget locked)")
             # Detect queued tasks permanently blocked by a failed dependency.
+            # Dedup at the (blocked, failed_root) pair level so that orchestrator
+            # restarts and root-task retry-fail flaps don't cause repeat alerts
+            # for the same blocking relationship (Bug 12).
             try:
-                stuck = db.query_stuck_queued()
-                new_stuck = [tid for tid in stuck if tid not in _stuck_notified]
-                if new_stuck:
-                    _stuck_notified.update(new_stuck)
+                pairs = db.query_stuck_queued_pairs()
+                new_pairs = [p for p in pairs if p not in _stuck_notified_pairs]
+                if new_pairs:
+                    _stuck_notified_pairs.update(new_pairs)
+                    try:
+                        stuck_state_path.write_text(
+                            json.dumps({"pairs": sorted(_stuck_notified_pairs)})
+                        )
+                    except OSError:
+                        log.exception("stuck-state write failed")
+                    blocked_ids = sorted({b for b, _ in new_pairs})
                     log.warning(
-                        "STUCK: %d queued task(s) blocked by failed dep: %s — "
-                        "use 'harness-task retry <id>' to re-queue the failed task",
-                        len(new_stuck), new_stuck,
+                        "STUCK: %d new blocked-by-failed-dep edge(s): %s — "
+                        "retry the failed root or update spec",
+                        len(new_pairs), new_pairs,
                     )
-                    notify("task_failed", new_stuck[0], {
+                    notify("task_blocked", blocked_ids[0], {
                         "reason": "downstream_blocked",
-                        "blocked_tasks": new_stuck,
+                        "blocked_tasks": blocked_ids,
+                        "edges": [{"blocked": b, "failed_root": r}
+                                  for b, r in new_pairs],
                     })
             except Exception:
                 log.exception("stuck-check failed")

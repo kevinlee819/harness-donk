@@ -335,6 +335,18 @@ class WorkerThread(threading.Thread):
             db.transition(j.task_id, "failed", "worktree_add_failed")
             return
 
+        # Belt-and-suspenders cleanup (Bug 7): even though we just created the
+        # worktree fresh from main HEAD, hammer it clean so any conceivable
+        # leftover from a prior remove-failure can't poison the retry. Cheap.
+        subprocess.run(
+            ["git", "-C", str(worktree), "reset", "--hard", "HEAD"],
+            capture_output=True, text=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(worktree), "clean", "-fdx"],
+            capture_output=True, text=True,
+        )
+
         db.set_branch(j.task_id, branch)
         db.transition(j.task_id, "working", "first_dispatch")
         self._write_status("working", branch, "starting", "")

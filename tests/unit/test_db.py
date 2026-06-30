@@ -34,7 +34,7 @@ class DbTestCase(unittest.TestCase):
 
         with sqlite3.connect(str(self.db_path)) as c:
             (v,) = c.execute("PRAGMA user_version").fetchone()
-        self.assertEqual(1, v)
+        self.assertEqual(db.SCHEMA_VERSION, v)
 
     def test_init_idempotent(self):
         db.init(SCHEMA)  # second call must not fail
@@ -339,32 +339,33 @@ class DbTestCase(unittest.TestCase):
         通过 _apply_migrations 直接，不动 production SCHEMA_VERSION。
         """
         import sqlite3
-        # 初始化到 v1（用当前 schema）
+        # 初始化到当前 SCHEMA_VERSION（schema/harness.sql 设定的版本）
         with sqlite3.connect(str(self.db_path)) as c:
             (v,) = c.execute("PRAGMA user_version").fetchone()
-        self.assertEqual(1, v)
+        self.assertEqual(db.SCHEMA_VERSION, v)
 
-        # 准备 mock migrations 目录
+        # 准备 mock migrations 目录 — 演练从 base+1 跳到 base+2
+        base = db.SCHEMA_VERSION
         migrations = Path(self._tmp.name) / "migrations"
         migrations.mkdir()
-        (migrations / "V2__add_test_col.sql").write_text(
+        (migrations / f"V{base+1}__add_test_col.sql").write_text(
             "ALTER TABLE tasks ADD COLUMN test_col TEXT;"
         )
-        (migrations / "V3__add_test_index.sql").write_text(
+        (migrations / f"V{base+2}__add_test_index.sql").write_text(
             "CREATE INDEX IF NOT EXISTS idx_test ON tasks(test_col);"
         )
 
-        # 调 migration runner，目标 v3
+        # 调 migration runner，目标 base+2
         with sqlite3.connect(str(self.db_path), isolation_level=None) as c:
-            new_v = db._apply_migrations(c, migrations, 1, 3)
+            new_v = db._apply_migrations(c, migrations, base, base + 2)
             (final_v,) = c.execute("PRAGMA user_version").fetchone()
             cols = [r[1] for r in c.execute("PRAGMA table_info(tasks)").fetchall()]
             idx_count = c.execute(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_test'"
             ).fetchone()[0]
 
-        self.assertEqual(3, new_v)
-        self.assertEqual(3, final_v)
+        self.assertEqual(base + 2, new_v)
+        self.assertEqual(base + 2, final_v)
         self.assertIn("test_col", cols)
         self.assertEqual(1, idx_count)
 

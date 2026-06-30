@@ -123,10 +123,11 @@ def cmd_cancel(args: argparse.Namespace) -> int:
 
 
 def cmd_retry(args: argparse.Namespace) -> int:
-    prior = db.retry_task(args.task_id)
+    prior = db.retry_task(args.task_id, force=bool(args.force))
     if prior is not None:
         json.dump(
-            {"ok": True, "task_id": args.task_id, "queued": True, "prior_status": prior},
+            {"ok": True, "task_id": args.task_id, "queued": True,
+             "prior_status": prior, "forced": bool(args.force)},
             sys.stdout,
         )
         sys.stdout.write("\n")
@@ -141,16 +142,18 @@ def cmd_retry(args: argparse.Namespace) -> int:
         sys.stdout.write("\n")
         return 1
     current = rows[0][1]
+    hint = (
+        f"retry only resets failed/merged tasks; current status is "
+        f"{current!r}. Pass --force to retry an orphaned task in "
+        f"dispatched/working/gating/blocked (verify via 'harness orphans')."
+    )
     json.dump(
         {
             "ok": False,
             "task_id": args.task_id,
             "error": "not_retryable",
             "current_status": current,
-            "message": (
-                f"retry only resets failed/merged tasks; current status is "
-                f"{current!r} (use cancel + add to abort and recreate)"
-            ),
+            "message": hint,
         },
         sys.stdout,
     )
@@ -232,6 +235,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     r = sub.add_parser("retry")
     r.add_argument("task_id")
+    r.add_argument("--force", action="store_true",
+                   help="accept orphaned tasks in dispatched/working/gating/blocked")
     r.set_defaults(func=cmd_retry)
 
     la = sub.add_parser("log-action")

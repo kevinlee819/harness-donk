@@ -117,15 +117,14 @@ spec 要求：
 | ① 需决策 | 任务进入 `BLOCKED` 状态（worker 写了 `guidance.json blocking=true`）| 把问题转述给用户；用户答复后调 `harness-task answer <id> <answer>` |
 | ② 待验收 | 任务进入 `MERGED` 状态 | 简报变更（任务名 + 关键文件）；问"看一下吗？" |
 | ③ 故障 | 任务进入 `FAILED` 状态 | **先自主出手，再升级**。见 §2.1.1 故障处置协议。 |
-| ③-连锁 | event payload 含 `"reason": "downstream_blocked"` | 这意味着某个关键任务失败导致多个下游任务卡住。立刻：① 告诉用户哪个任务失败了、失败原因、有多少下游被卡；② **不等用户问**，直接调 `harness-task retry <failed_id>` 重试；③ ack 事件；④ 汇报"已自动重试，orchestrator 会继续" |
-| ③-watchdog-持续卡死 | event payload 含 `"reason": "persistent_stuck"` | 同 ③-连锁 的处理：根任务失败导致下游卡死，重试根任务。但已经被 watchdog 重发过 → 说明协调者上次没处理或重试也失败了。**先看 `harness-task history <root_id>`** 判断 retry 是不是已经徒劳，再决定：a) 已 retry 多次仍失败 → 把失败摘要给用户、问要不要改 spec/放弃，**不要再傻乎乎地 retry**；b) 没 retry 过 → retry 一次 |
+| ③-连锁 | `event_type == "task_blocked"`（payload 含 `reason: "downstream_blocked"` + `edges: [{blocked, failed_root}, ...]`）| 某个关键任务失败导致多个下游任务卡住。立刻：① 告诉用户哪个根任务失败了、失败原因、有多少下游被卡（看 `edges` 里的 `failed_root` 列）；② **不等用户问**，直接调 `harness-task retry <failed_root>` 重试根任务；③ ack 事件；④ 汇报"已自动重试，orchestrator 会继续" |
 | ③-watchdog-编排器挂了 | event payload 含 `"reason": "orchestrator_down"` | 严重事件——执行平面挂了。**直接调** `harness restart-orchestrator`（JSON 输出 `ok:true` 即成功）；调完 ack 事件；告诉用户："orchestrator 已重启，继续推进任务。" 若 `ok:false`（会话不存在）→ 告诉用户运行 `harness-infi` 重建会话 |
 | ③-watchdog-事件堆积 | event payload 含 `"reason": "events_pending_unread"` | 表示协调者自己有事件没消费——按 §2.2 流程把 `harness events pending` 里**所有**事件依次处理掉、ack 掉。处理完这条 nudge 也一并 ack |
 | ③-空合并 | event payload 含 `"reason": "no_commits"` | worker 报告 gate 通过但实际没产出任何 commit（典型原因：AGENTS.md 的 build/lint/test 全是空字符串，gate 在空 worktree 上 trivially 通过）。**worktree 和分支保留下来便于排障**。立刻告诉用户：① 任务名 + 为什么是空合并的猜测（多半是 gate 没配好）；② 建议先派一个修 gate 的任务（参考 §0 情形 C），再 `harness-task retry <id>` 重新跑这个任务 |
 
 ### 2.1.1 故障处置协议（§2.1 ③ 故障 详细步骤）
 
-收到 `task_failed` 事件（reason 不是 `downstream_blocked` / `persistent_stuck` / `orchestrator_down`，那些走上表各自分支）时，**按顺序执行**：
+收到 `task_failed` 事件（reason 不是 `orchestrator_down`/`events_pending_unread`/`no_commits` 等系统级 reason，那些走上表各自分支；`downstream_blocked` 已独立为 `task_blocked` 事件类型）时，**按顺序执行**：
 
 **步骤 1 — 查现状**
 
@@ -189,7 +188,7 @@ elif retries >= 1:
 所以协调策略是**用户每次重新与你交互时**（"在吗"、"回来了"、"看看怎么样"、新的请求……任何用户消息），你**在回应之前**先做：
 
 1. 跑 `harness events pending` 看是否有待处理事件
-2. 若非空，按本节 §2.1 三类触发依次报告（`needs_decision` → ①、`task_failed` → ③、`task_completed` → ②、`budget_exceeded` 单独告警）
+2. 若非空，按本节 §2.1 四类触发依次报告（`needs_decision` → ①、`task_completed` → ②、`task_failed` → ③、`task_blocked` → ③-连锁、`budget_exceeded` 单独告警）
 3. **报告完后**调 `harness events ack <eid> [<eid>...]` 一次性把已报告的事件标交付（防止下次重复打扰）
 4. 再回应用户当下的消息
 

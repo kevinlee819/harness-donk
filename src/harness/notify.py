@@ -24,7 +24,8 @@ from typing import Optional
 from harness import db
 from harness.atomic_write import write_json
 
-ALLOWED = {"needs_decision", "task_completed", "task_failed", "budget_exceeded"}
+ALLOWED = {"needs_decision", "task_completed", "task_failed",
+           "task_blocked", "budget_exceeded"}
 
 # Debounce: don't inject more than once per N seconds across all threads.
 _last_poke_time: float = 0.0

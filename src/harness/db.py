@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Iterator, Optional
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 """harness.db schema version. Bump on incompatible changes; see CLAUDE.md §8."""
 
 
@@ -69,7 +69,14 @@ def init(schema_sql_path: Path, db_path: Optional[Path] = None) -> None:
     sql = schema_sql_path.read_text()
     migrations_dir = schema_sql_path.parent / "migrations"
     with _connect(p) as c:
+        # Capture the on-disk version BEFORE running base SQL — schema.sql
+        # contains an unconditional `PRAGMA user_version=N` that would otherwise
+        # mask an upgrade-needed state (legacy DB looks current → migrations skipped).
+        pre_v = c.execute("PRAGMA user_version").fetchone()[0]
         c.executescript(sql)
+        if 0 < pre_v < SCHEMA_VERSION:
+            # Legacy DB: restore the real prior version so _apply_migrations sees it.
+            c.execute(f"PRAGMA user_version={pre_v}")
         v = c.execute("PRAGMA user_version").fetchone()[0]
         v = _apply_migrations(c, migrations_dir, v, SCHEMA_VERSION)
         if v != SCHEMA_VERSION:
@@ -433,7 +440,8 @@ def event_write(
 
     event_type ∈ {needs_decision, task_completed, task_failed, budget_exceeded}.
     """
-    allowed = {"needs_decision", "task_completed", "task_failed", "budget_exceeded"}
+    allowed = {"needs_decision", "task_completed", "task_failed",
+               "task_blocked", "budget_exceeded"}
     if event_type not in allowed:
         raise ValueError(f"event_type {event_type!r} not in {allowed}")
     with _connect() as c:
@@ -458,6 +466,14 @@ def event_query_pending() -> list[tuple]:
 def event_mark_delivered(event_id: int) -> None:
     with _connect() as c:
         c.execute("UPDATE events SET delivered=1 WHERE id=?", (event_id,))
+    # Drop a sentinel so the watchdog can apply an ack-grace window before
+    # firing events_pending_unread again (Bug 11: new events arriving within
+    # ~seconds of an ack were misread as "ignored by coordinator").
+    try:
+        sentinel = _db_path().parent / ".last-event-ack"
+        sentinel.write_text(str(int(time.time())))
+    except OSError:
+        pass
 
 
 def session_touch(task_id: str, backend: str) -> None:
@@ -525,20 +541,48 @@ def query_stuck_queued() -> list[str]:
     return [r[0] for r in rows]
 
 
-def retry_task(task_id: str) -> Optional[str]:
+def query_stuck_queued_pairs() -> list[tuple[str, str]]:
+    """Return (blocked_id, failed_root_id) for every queued-by-failed-dep edge.
+
+    Used by orchestrator to dedup downstream_blocked notifications per
+    (blocked, root) pair — re-alert only when a new failed root emerges,
+    not on every orchestrator restart / root status flap.
+    """
+    with _connect() as c:
+        rows = c.execute("""
+            SELECT t1.id, t2.id FROM tasks t1
+            JOIN json_each(t1.depends_on) je ON 1=1
+            JOIN tasks t2 ON t2.id = je.value
+            WHERE t1.status = 'queued'
+              AND t1.depends_on IS NOT NULL AND t1.depends_on != ''
+              AND t2.status = 'failed'
+        """).fetchall()
+    return [(r[0], r[1]) for r in rows]
+
+
+def retry_task(task_id: str, force: bool = False) -> Optional[str]:
     """Reset a task to queued for re-dispatch. Returns prior_status, or None on no-op.
 
-    Accepts `failed` and `merged` source states:
+    Accepts `failed` and `merged` source states by default:
       - `failed`: the obvious "fix and retry" case
       - `merged`: needed when a prior run produced a "ghost merge" (worker
         produced no commits but task was marked merged). After [no_commits]
         defense is in place these are rare, but legitimate iteration ("redo
         T-XXX") should still work.
 
-    Returns None if the task doesn't exist or is in a non-retryable state
-    (queued/dispatched/working/gating/blocked) — caller can distinguish via
-    the returned value vs. checking task existence.
+    With `force=True`, additionally accepts the transient states
+    `dispatched`/`working`/`gating`/`blocked` — used to recover orphaned tasks
+    whose worker died silently (Bug 1). Caller is responsible for verifying
+    via `harness orphans` that the worker is truly gone; if a live worker is
+    racing, reap_orphans + worker-thread death-detection will eventually
+    reconcile, but in the worst case two workers may briefly compete.
+
+    Returns None if the task doesn't exist or its state isn't retryable under
+    the chosen flag.
     """
+    accepted = {"failed", "merged"}
+    if force:
+        accepted = accepted | {"dispatched", "working", "gating", "blocked"}
     now = _now()
     with _connect() as c:
         c.execute("BEGIN IMMEDIATE")
@@ -550,7 +594,7 @@ def retry_task(task_id: str) -> Optional[str]:
                 c.execute("ROLLBACK")
                 return None
             prior = row[0]
-            if prior not in ("failed", "merged"):
+            if prior not in accepted:
                 c.execute("ROLLBACK")
                 return None
             c.execute(
@@ -561,7 +605,8 @@ def retry_task(task_id: str) -> Optional[str]:
             c.execute(
                 "INSERT INTO transitions(task_id, from_state, to_state, reason, ts) "
                 "VALUES (?,?,?,?,?)",
-                (task_id, prior, "queued", "manual_retry", now),
+                (task_id, prior, "queued",
+                 "force_retry" if force else "manual_retry", now),
             )
             c.execute("COMMIT")
             return prior

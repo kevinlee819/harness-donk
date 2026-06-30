@@ -5,16 +5,12 @@ Designed to be invoked by a small daemon loop (`bin/harness-watchdog`) every
 JSON file at `.harness/.watchdog-state.json` that tracks "last-alerted-at"
 per problem-key so we don't spam the user.
 
-Three problem classes:
-  1. orchestrator_down — there are non-terminal tasks but none has been
-     updated in `STALE_MINUTES` minutes. The orchestrator main loop bumps
-     `updated` on every transition, claim, and status write, so a long
-     silence means the process died or hung. Re-alert every 30 min.
-  2. persistent_stuck — queued tasks blocked by a failed dependency. The
-     orchestrator's hot loop fires this once via `_stuck_notified` but the
-     set is in-memory; if the user dismisses the notification, the watchdog
-     re-surfaces it hourly so it isn't silently lost.
-  3. events_pending — undelivered events older than `EVENTS_PENDING_MINUTES`
+Two problem classes:
+  1. orchestrator_down — there are non-terminal tasks but the orchestrator's
+     heartbeat file (.harness/.orchestrator-heartbeat) is stale or missing.
+     The main loop touches it each tick; long silence = process gone.
+     Re-alert every 30 min.
+  2. events_pending — undelivered events older than `EVENTS_PENDING_MINUTES`
      in the events table. Means the coordinator hasn't been asked anything
      by the user since the events fired (pull-on-re-engagement model).
      Watchdog fires a soft desktop notification to nudge the user back.
@@ -43,10 +39,10 @@ log = logging.getLogger("harness.watchdog")
 # ── thresholds ────────────────────────────────────────────
 STALE_MINUTES = 15         # tasks not updated for this long → orchestrator likely dead
 EVENTS_PENDING_MINUTES = 1   # undelivered event age before we nudge
+EVENTS_ACK_GRACE_S = 30      # quiet window after last ack before re-alerting (Bug 11)
 
 # ── re-alert intervals (seconds) ──────────────────────────
 RE_ALERT_ORCH_DOWN = 30 * 60       # 30 min
-RE_ALERT_STUCK_TASK = 60 * 60       # 60 min
 RE_ALERT_EVENTS_PENDING = 30 * 60   # 30 min
 
 
@@ -105,61 +101,63 @@ def tick(project_dir: Path) -> dict:
     summary: dict = {
         "ts": datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "orchestrator_down": False,
-        "stuck_alerted": [],
         "events_alerted": False,
         "active_count": 0,
     }
 
-    # ── 1. orchestrator_down ────────────────────────────
+    # ── 1. orchestrator_down (heartbeat-based, Bug 9) ────
+    # Old design read max(tasks.updated) but that's static when all live tasks are
+    # queued waiting on a dependency — so a healthy orchestrator looked dead.
+    # New: orchestrator main loop writes .harness/.orchestrator-heartbeat each tick;
+    # if the file is stale (or missing while tasks exist), the process is really gone.
+    heartbeat_file = project_dir / ".harness" / ".orchestrator-heartbeat"
     fresh = db.query_active_freshness()
     if fresh is None:
-        # No active tasks → orchestrator idle, not a problem
+        # No active tasks → idle is fine; nothing to supervise.
         state["alerts"].pop("orchestrator_down", None)
     else:
-        active_count, max_updated = fresh
+        active_count, _ = fresh
         summary["active_count"] = active_count
-        last_epoch = _iso_to_epoch(max_updated)
-        # If parse fails, treat as fresh (avoid false alarm)
-        if last_epoch is not None and (now - last_epoch) >= STALE_MINUTES * 60:
+        hb_epoch: Optional[float] = None
+        if heartbeat_file.is_file():
+            try:
+                hb_epoch = float(heartbeat_file.read_text().strip())
+            except (ValueError, OSError):
+                hb_epoch = None
+        # Stale = heartbeat older than threshold OR file missing entirely
+        stale = (hb_epoch is None) or ((now - hb_epoch) >= STALE_MINUTES * 60)
+        if stale:
             if _should_alert(state, "orchestrator_down", RE_ALERT_ORCH_DOWN, now):
-                age_min = int((now - last_epoch) / 60)
+                if hb_epoch is None:
+                    age_desc = "no heartbeat file"
+                    age_min = -1
+                else:
+                    age_min = int((now - hb_epoch) / 60)
+                    age_desc = f"{age_min} 分钟无心跳"
                 notify("task_failed", None, {
                     "reason": "orchestrator_down",
                     "active_tasks": active_count,
-                    "last_update": max_updated,
-                    "stale_minutes": age_min,
+                    "heartbeat_age_minutes": age_min,
                     "message": (
-                        f"{active_count} 个任务在运行态但 {age_min} 分钟无更新——"
-                        "orchestrator 可能已停止。"
+                        f"{active_count} 个任务在运行态但 orchestrator {age_desc}——"
+                        "进程可能已停止。"
                     ),
                 })
                 _mark_alert(state, "orchestrator_down", now)
                 summary["orchestrator_down"] = True
-                log.warning("watchdog: orchestrator_down alert (active=%d age=%dm)",
-                            active_count, age_min)
+                log.warning("watchdog: orchestrator_down alert (active=%d %s)",
+                            active_count, age_desc)
         else:
-            # Recently updated → healthy, clear sticky flag if any
+            # Heartbeat fresh → orchestrator alive, clear sticky flag if any
             state["alerts"].pop("orchestrator_down", None)
 
-    # ── 2. persistent_stuck (failed-dep blocked queued tasks) ──
-    try:
-        stuck = db.query_stuck_queued()
-    except Exception:
-        log.exception("watchdog: query_stuck_queued failed")
-        stuck = []
-    for tid in stuck:
-        key = f"stuck:{tid}"
-        if _should_alert(state, key, RE_ALERT_STUCK_TASK, now):
-            notify("task_failed", tid, {
-                "reason": "persistent_stuck",
-                "message": f"{tid} 持续被失败依赖卡住——需要决策（重试 / 改 spec / 放弃）",
-            })
-            _mark_alert(state, key, now)
-            summary["stuck_alerted"].append(tid)
-    # GC stale stuck entries (no longer stuck → drop)
-    stuck_set = set(f"stuck:{t}" for t in stuck)
+    # ── 2. Garbage-collect legacy stuck:<tid> alert keys (Bug 10) ──
+    # Previously watchdog re-fired `persistent_stuck` hourly for every queued
+    # task with a failed dep, duplicating the orchestrator's downstream_blocked
+    # event and generating one alert per blocked child. The orchestrator's
+    # once-per-set in-memory dedup is sufficient; the watchdog no longer fires.
     for k in list(state["alerts"].keys()):
-        if k.startswith("stuck:") and k not in stuck_set:
+        if k.startswith("stuck:"):
             del state["alerts"][k]
 
     # ── 3. events_pending (coordinator hasn't picked up) ──
@@ -167,8 +165,22 @@ def tick(project_dir: Path) -> dict:
     if ev is not None:
         count, oldest_ts = ev
         oldest_epoch = _iso_to_epoch(oldest_ts)
+        # Bug 11: respect an ack-grace window. If the coordinator just acked
+        # something, give it EVENTS_ACK_GRACE_S to process any follow-up
+        # events before we re-fire — otherwise new events arriving seconds
+        # after an ack get misread as "ignored".
+        ack_sentinel = project_dir / ".harness" / ".last-event-ack"
+        last_ack_epoch: Optional[float] = None
+        if ack_sentinel.is_file():
+            try:
+                last_ack_epoch = float(ack_sentinel.read_text().strip())
+            except (ValueError, OSError):
+                last_ack_epoch = None
+        in_ack_grace = (last_ack_epoch is not None
+                        and (now - last_ack_epoch) < EVENTS_ACK_GRACE_S)
         if oldest_epoch is not None \
-           and (now - oldest_epoch) >= EVENTS_PENDING_MINUTES * 60:
+           and (now - oldest_epoch) >= EVENTS_PENDING_MINUTES * 60 \
+           and not in_ack_grace:
             if _should_alert(state, "events_pending",
                              RE_ALERT_EVENTS_PENDING, now):
                 age_min = int((now - oldest_epoch) / 60)

@@ -1,11 +1,11 @@
 -- harness SQLite schema
--- schema_version (PRAGMA user_version): 1
+-- schema_version (PRAGMA user_version): 2
 -- 见 docs/data-schemas.md §1
 
 PRAGMA journal_mode=WAL;
 PRAGMA busy_timeout=5000;
 PRAGMA foreign_keys=ON;
-PRAGMA user_version=1;
+PRAGMA user_version=2;
 
 CREATE TABLE IF NOT EXISTS tasks (
   id            TEXT PRIMARY KEY,
@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS events (
   ts         TEXT NOT NULL,
   event_type TEXT NOT NULL
              CHECK (event_type IN ('needs_decision','task_completed',
-                                   'task_failed','budget_exceeded')),
+                                   'task_failed','task_blocked','budget_exceeded')),
   task_id    TEXT REFERENCES tasks(id),
   payload    TEXT NOT NULL,
   delivered  INTEGER NOT NULL DEFAULT 0

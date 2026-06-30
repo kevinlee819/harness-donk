@@ -22,7 +22,7 @@ test_init_creates_expected_files() {
 
   # SQLite 版本对
   local v; v=$(sqlite3 "$d/.harness/harness.db" "PRAGMA user_version;")
-  assert_eq "1" "$v"
+  assert_eq "2" "$v"
 
   # 必备目录
   [[ -d "$d/.harness/workers" ]] || _assert_fail "workers/"
