@@ -177,6 +177,7 @@ harness init [--backend codex]     # onboard current project (run once per new p
 harness setup                      # one-time environment check + create global config dir
 harness doctor                     # check each backend CLI (burns a small amount of API)
 harness status                     # view current status of all tasks
+harness watch                      # interactive TUI: tasks + worker detail + coordinator activity
 harness attach <wid>               # view a snapshot of what a worker is currently doing
 harness events pending             # view pending notification events
 harness backup                     # backup SQLite database

@@ -41,6 +41,8 @@ harness events ack <eid>...              # mark events as delivered (prevent coo
 harness orphans [minutes]                # list orphan tasks (working/dispatched/gating updated > N min ago, default 5)
 harness watchdog-tick                    # run one watchdog cycle manually (see §8.2)
 harness attach [<worker_id>]             # attach to tmux (no argument = coordinator session)
+harness watch                            # interactive TUI: task list + worker detail + status bar
+                                         # see §1.2.1 for keybindings
 harness backup                           # sqlite3 .backup → .harness/backups/harness-<ts>.db
                                          # includes retention policy (default 7 days, HARNESS_BACKUP_RETAIN_DAYS adjustable)
 harness run-once [--mock] [--backend N] [--model M] [--max-retries N]
@@ -50,6 +52,34 @@ harness run-once [--mock] [--backend N] [--model M] [--max-retries N]
 Return codes: 0 success, 1 user error (missing args etc.), 2 system error (missing dependency, database corruption).
 
 Not implemented: `stop` / `ls` — not needed for current MVP/iter 1-2 scope.
+
+### 1.2.1 `harness watch` — interactive TUI
+
+Curses-based dashboard. Three zones inside one terminal:
+1. **Task list** (top ~60%): live, 1 s refresh, ▶ cursor, scrolls when overflowing.
+2. **Detail pane** (middle ~35%): selected (or pinned) task's worker `status.json`
+   (`turns / files_changed / progress / updated age`) plus most recent 5 rows from
+   `transitions`. Read-only — the task panel still drives all state changes via
+   the DB.
+3. **Status bar** (bottom 2 rows): coordinator's most recent `log-action` entry
+   on the left, counters (`●N ○N ✓N ✗N`) + today's cost on the right.
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | next task |
+| `k` / `↑` | prev task |
+| `g` / `G` | first / last |
+| `Enter` / `Space` | pin selected task to detail pane (toggle) |
+| `r` | retry task (`failed` / `merged` only) |
+| `R` | force-retry (works on orphaned `working` / `blocked` / `dispatched` / `gating`) |
+| `c` | cancel task |
+| `?` | help overlay (any key dismisses) |
+| `q` / `Esc` | quit |
+
+Actions (`r`, `R`, `c`) shell out to `harness-task`; the DB is the only source of
+truth. The TUI never writes to `harness.db` directly.
+
+Minimum terminal: 60 × 8. Below that it prints a message and waits for `q`.
 
 ---
 
