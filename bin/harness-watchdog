@@ -32,7 +32,7 @@ if [[ ! -f "$proj_dir/.harness/harness.db" ]]; then
 fi
 
 export HARNESS_DB="$proj_dir/.harness/harness.db"
-interval="${HARNESS_WATCHDOG_INTERVAL:-600}"
+interval="${HARNESS_WATCHDOG_INTERVAL:-60}"
 log_dir="$proj_dir/.harness/logs"
 mkdir -p "$log_dir"
 log_file="$log_dir/watchdog.log"
@@ -42,7 +42,7 @@ echo "────────────────────────�
 printf "Detection rules:\n"
 printf "  • orchestrator_down    — active tasks idle ≥ 15 min\n"
 printf "  • persistent_stuck     — queued task blocked by failed dep (hourly re-alert)\n"
-printf "  • events_pending       — unconsumed events ≥ 10 min (30-min re-alert)\n"
+printf "  • events_pending       — unconsumed events ≥ 1 min (30-min re-alert)\n"
 echo
 echo "Tail log: $log_file"
 echo

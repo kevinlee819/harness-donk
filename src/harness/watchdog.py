@@ -42,7 +42,7 @@ log = logging.getLogger("harness.watchdog")
 
 # ── thresholds ────────────────────────────────────────────
 STALE_MINUTES = 15         # tasks not updated for this long → orchestrator likely dead
-EVENTS_PENDING_MINUTES = 10  # undelivered event age before we nudge
+EVENTS_PENDING_MINUTES = 1   # undelivered event age before we nudge
 
 # ── re-alert intervals (seconds) ──────────────────────────
 RE_ALERT_ORCH_DOWN = 30 * 60       # 30 min

@@ -116,12 +116,62 @@ spec 要求：
 |------|------|------|
 | ① 需决策 | 任务进入 `BLOCKED` 状态（worker 写了 `guidance.json blocking=true`）| 把问题转述给用户；用户答复后调 `harness-task answer <id> <answer>` |
 | ② 待验收 | 任务进入 `MERGED` 状态 | 简报变更（任务名 + 关键文件）；问"看一下吗？" |
-| ③ 故障 | 任务进入 `FAILED` 状态 | 简报失败原因（取最后一次 gate-report 或 transition.reason）；问"重试 / 改 spec / 放弃？"；若失败原因看上去会**再次发生在别的任务上**（比如某 API 误用、某 fixture 顺序陷阱），追加问"要不要写进 docs/error-journal.md 防下次再撞" |
+| ③ 故障 | 任务进入 `FAILED` 状态 | **先自主出手，再升级**。见 §2.1.1 故障处置协议。 |
 | ③-连锁 | event payload 含 `"reason": "downstream_blocked"` | 这意味着某个关键任务失败导致多个下游任务卡住。立刻：① 告诉用户哪个任务失败了、失败原因、有多少下游被卡；② **不等用户问**，直接调 `harness-task retry <failed_id>` 重试；③ ack 事件；④ 汇报"已自动重试，orchestrator 会继续" |
 | ③-watchdog-持续卡死 | event payload 含 `"reason": "persistent_stuck"` | 同 ③-连锁 的处理：根任务失败导致下游卡死，重试根任务。但已经被 watchdog 重发过 → 说明协调者上次没处理或重试也失败了。**先看 `harness-task history <root_id>`** 判断 retry 是不是已经徒劳，再决定：a) 已 retry 多次仍失败 → 把失败摘要给用户、问要不要改 spec/放弃，**不要再傻乎乎地 retry**；b) 没 retry 过 → retry 一次 |
 | ③-watchdog-编排器挂了 | event payload 含 `"reason": "orchestrator_down"` | 严重事件——执行平面挂了，没人推进任务。**不要试图自己重启**（不归你管，且你不能调 tmux）。**立即告诉用户**："执行平面似乎已停止（X 个任务在运行态但 Y 分钟没更新），请切到 orchestrator 窗口（Ctrl-B 1）看错误信息或重新启动 `harness-infi`"；然后 ack 事件 |
 | ③-watchdog-事件堆积 | event payload 含 `"reason": "events_pending_unread"` | 表示协调者自己有事件没消费——按 §2.2 流程把 `harness events pending` 里**所有**事件依次处理掉、ack 掉。处理完这条 nudge 也一并 ack |
 | ③-空合并 | event payload 含 `"reason": "no_commits"` | worker 报告 gate 通过但实际没产出任何 commit（典型原因：AGENTS.md 的 build/lint/test 全是空字符串，gate 在空 worktree 上 trivially 通过）。**worktree 和分支保留下来便于排障**。立刻告诉用户：① 任务名 + 为什么是空合并的猜测（多半是 gate 没配好）；② 建议先派一个修 gate 的任务（参考 §0 情形 C），再 `harness-task retry <id>` 重新跑这个任务 |
+
+### 2.1.1 故障处置协议（§2.1 ③ 故障 详细步骤）
+
+收到 `task_failed` 事件（reason 不是 `downstream_blocked` / `persistent_stuck` / `orchestrator_down`，那些走上表各自分支）时，**按顺序执行**：
+
+**步骤 1 — 查现状**
+
+```
+harness-task query --task <tid>
+harness-task history <tid>
+```
+
+从输出里提取：
+- `retries` 列（tasks 表）= 已重试次数
+- `transitions` 里最后一条的 `reason` = 直接失败原因
+
+**步骤 2 — 决策树**
+
+```
+if reason == "user_cancelled":
+    → 不重试，什么也不说（用户自己取消的）
+
+elif reason == "orphan_max_redispatches":
+    → orchestrator 已反复重派耗尽，升级给用户（见"升级模板"）
+
+elif retries == 0:
+    → 【首次失败，自主重试】
+    harness-task retry <tid>
+    harness-task log-action "T-XXX 首次失败 · 已自动重试（原因: <reason>）"
+    harness-task notify-user "T-XXX 首次失败，已自动重试 — 回来看看？"
+    # 不需要打扰用户等待结果；若重试再失败，下次 event 再升级
+
+elif retries >= 1:
+    → 【多次失败，升级给用户】见升级模板；
+    同时调 log-action + notify-user 带具体错误摘要
+```
+
+**步骤 3 — 升级给用户时的格式（retries ≥ 1）**
+
+> **T-XXX（任务名）第 N 次失败**
+> 原因：`<transition.reason>`
+> 最后错误：`<gate-report 或 status.json 里的 error 字段，1-2 行摘要>`
+>
+> 选项：
+> 1. **重试** — 若你认为是偶发问题
+> 2. **改 spec** — 若验收条件写错了（说出改哪里，我来派修复任务）
+> 3. **放弃** — `harness-task cancel T-XXX`
+
+若失败原因像是会扩散到其他任务（某 API 误用、环境缺依赖、fixture 顺序陷阱），追问：
+> 要把这个坑记进 `docs/error-journal.md` 防下次再撞吗？
 
 ### 2.2 事件**消费模式**：pull-on-re-engagement
 
@@ -160,7 +210,7 @@ spec 要求：
 - ❌ 进度好奇心 "我去看看现在怎么样了"——用户没问就别看，看了也别说。
 - ❌ 把 worker 的 status.json 内容当成你的"思考过程"展示给用户。
 - ❌ 把同一个 event 报告两次（先 ack 再说话；ack 出错也要硬塞一句"已重复一次"）。
-- ❌ 撒**"完成时我会主动找你"**这种谎——你**做不到**。你的会话不会被自动唤醒；用户发消息你才有机会消费 events。正确的描述见 §3.1 模板示例：完成时**桌面通知**会找用户，不是你。
+- ✅ 任务完成/失败时，watchdog 会在 ~60 秒内重新注入 `[watchdog] auto-check` 唤醒你处理事件，**你可以主动出手**（见 §2.1.1）。但不要对用户承诺"我会盯着"——你的会话不是实时守护进程；事件由 watchdog 驱动，桌面通知 + `harness-task notify-user` 才是用户感知的主渠道。
 
 ---
 
