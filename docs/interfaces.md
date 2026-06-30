@@ -15,10 +15,19 @@ harness-infi [--no-attach] [--backend <name>] [--model <name>]
 ```
 
 - Behavior: Creates or reuses a tmux session in the current directory (named `harness-<sha8(pwd)>`), with three windows:
-  - **window 0 `coordinator`**: Interactive `claude` loading `coordinator/coordinator.md` as system prompt, with `coordinator/tools/` injected into PATH (`harness-task` available); bottom split-pane shows live status panel
+  - **window 0 `main`**: split into two panes —
+    - Pane 0 (left, ~60%): interactive `claude` loading `coordinator/coordinator.md` as system prompt, with `coordinator/tools/` injected into PATH (`harness-task` available)
+    - Pane 1 (right, ~40%): `harness watch` interactive TUI (see §1.2.1)
+
+    Split is **vertical** (left/right) when the host terminal is ≥140 cols wide, **horizontal** (top/bottom) otherwise. The TUI auto-restarts if the user accidentally exits it with `q`.
   - **window 1 `orchestrator`**: Long-running `orchestrator.sh` (without `--once`), polling queue every 5s; dispatches immediately when tasks arrive
-  - **window 2 `watchdog`**: Long-running `harness-watchdog`, ticks every 10 min (configurable via `HARNESS_WATCHDOG_INTERVAL`); see §8.2
-- Attaches to window 0 by default; `Ctrl-B 0/1/2` to switch windows, `Ctrl-B D` to detach while session remains alive
+  - **window 2 `watchdog`**: Long-running `harness-watchdog`, ticks every 60s (configurable via `HARNESS_WATCHDOG_INTERVAL`); see §8.2
+- Attaches to window 0 by default. Navigation (no tmux prefix):
+  - `Alt-1` / `Alt-2`: focus left pane (coordinator) / right pane (watch TUI)
+  - `Alt-0`: jump back to `main` window
+  - `Alt-o` / `Alt-w`: orchestrator / watchdog windows
+  - Tmux defaults still work: `Ctrl-B 0/1/2` switch windows, `Ctrl-B D` detach
+  - Caveat: Alt-key bindings are server-wide and re-pointed to the most recent `harness-infi` session. Running two harness sessions concurrently means only the latest one's Alt keys are live; others fall back to Ctrl-B navigation.
 - Options:
   - `--no-attach`: Only create the session (for scripts/CI); use `tmux attach -t harness-<hash>` afterward to enter
   - `--backend <name>`: Which writer backend the orchestrator uses (default `claude`; requires `adapters/${name}.sh` to exist)

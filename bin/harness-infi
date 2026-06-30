@@ -3,9 +3,14 @@
 #
 # 在当前 harness 项目目录内：
 #   1. 复用或创建 tmux 会话 `harness-<sha8(pwd)>`
-#   2. window 0 (coordinator): 交互式 claude，coordinator.md 注入 system prompt
-#   3. window 1 (orchestrator): 后台执行平面，长跑 orchestrator.sh（每 5s 轮询）
-#   4. attach 到 coordinator window；用户 Ctrl-B 0/1 可在两窗口间切换
+#   2. window 0 (main):
+#        左 pane (60%): 交互式 claude，coordinator.md 注入 system prompt
+#        右 pane (40%): harness watch TUI（任务列表 + worker 详情 + 协调者动作）
+#                      终端窄于 120 列时退化为底部 18% 横向分割跑旧 watch-panel
+#   3. window 1 (orchestrator): 后台执行平面，长跑 orchestrator.sh
+#   4. window 2 (watchdog): 60s 心跳巡检
+#   5. attach 到 main window；左右键切 pane 用 Alt-1 / Alt-2（无需 tmux prefix）
+#      切窗口：Alt-0 main / Alt-` next / Ctrl-b 1 = orchestrator / Ctrl-b 2 = watchdog
 #
 # 选项：
 #   --no-attach        创建会话但不 attach（脚本/CI 用）
@@ -121,7 +126,10 @@ exec claude --append-system-prompt "\$(cat '$coord_md')"
 EOF
 chmod +x "$coord_launcher"
 
-# watch-panel: loops every 5s, shows live task progress in the bottom split-pane
+# watch TUI: the new interactive dashboard. Auto-restarts if user accidentally
+# quits with `q` so the pane never goes silent. Falls back to the old looping
+# watch-panel only if the curses TUI exits immediately (e.g. terminal lacks
+# unicode support); see watch_tui.py:_show_help for keybindings.
 panel_launcher="$cwd/.harness/.panel-launcher.sh"
 cat > "$panel_launcher" <<EOF
 #!/usr/bin/env bash
@@ -131,10 +139,19 @@ export HARNESS_DB='$cwd/.harness/harness.db'
 export PATH='$HARNESS_HOME/coordinator/tools:$HARNESS_HOME/bin':"\$PATH"
 cd '$cwd'
 while true; do
-  clear
-  '$HARNESS_HOME/bin/harness' watch-panel 2>/dev/null \
-    || printf "🫏  initializing…\n"
-  sleep 5
+  # The TUI handles its own clear + redraw loop. We just wrap-and-restart so
+  # accidentally pressing 'q' brings it back rather than leaving a dead pane.
+  '$HARNESS_HOME/bin/harness' watch 2>/dev/null || {
+    # Curses failed (no TERM, ancient terminal, etc.) — fall back to snapshot.
+    clear
+    '$HARNESS_HOME/bin/harness' watch-panel 2>/dev/null \
+      || printf "🫏  initializing…\n"
+    sleep 5
+    continue
+  }
+  # User pressed q — show a hint and wait briefly before respawning.
+  printf "\n  \033[2m(press Enter to reopen, Ctrl-C to leave the pane dead)\033[0m\n"
+  read -r _ || break
 done
 EOF
 chmod +x "$panel_launcher"
@@ -170,23 +187,47 @@ exec '$HARNESS_HOME/bin/harness-watchdog' '$cwd'
 EOF
 chmod +x "$watchdog_launcher"
 
-# ── 创建会话：window 0 = coordinator + live panel, window 1 = orchestrator ──
-tmux new-session -d -s "$session" -c "$cwd" -n coordinator "$coord_launcher"
+# ── 创建会话：window 0 = main (coord + watch), 1 = orchestrator, 2 = watchdog ──
+tmux new-session -d -s "$session" -c "$cwd" -n main "$coord_launcher"
 tmux set-option -t "$session" remain-on-exit on >/dev/null 2>&1 || true
 
-# Split coordinator window: top 82% = claude, bottom 18% = live status panel.
-# Failure is non-fatal — some minimal terminals can't split.
-tmux split-window -t "$session:0" -v -p 18 -c "$cwd" "$panel_launcher" 2>/dev/null || true
-tmux select-pane  -t "$session:0.0"   # keep focus on top pane (coordinator)
+# Decide split orientation based on outer terminal width. The watch TUI needs
+# ≥60 cols, and Claude's prompt + thinking output needs ≥80 to read comfortably.
+# A vertical (left/right) split needs ~140 to give both sides enough breathing
+# room; below that we fall back to the legacy horizontal (top/bottom) layout
+# so neither pane is unusable.
+term_w=$(tput cols 2>/dev/null || echo 80)
+if (( term_w >= 140 )); then
+  # Vertical split: coordinator left ~60%, watch TUI right ~40%
+  tmux split-window -t "$session:0" -h -p 40 -c "$cwd" "$panel_launcher" 2>/dev/null || true
+else
+  # Horizontal split: coordinator top ~70%, watch TUI bottom ~30%
+  tmux split-window -t "$session:0" -v -p 30 -c "$cwd" "$panel_launcher" 2>/dev/null || true
+fi
+tmux select-pane -t "$session:0.0"   # focus the coordinator pane
 
 tmux new-window -t "$session" -c "$cwd" -n orchestrator "$orch_launcher"
 tmux new-window -t "$session" -c "$cwd" -n watchdog     "$watchdog_launcher"
 
-# 默认停在 coordinator window
+# Per-session keybindings — applied via if-shell so they only fire when the
+# user's active session matches ours. No-prefix Alt keys for pane/window nav:
+#   Alt-1 / Alt-2  → focus left / right pane in window 0
+#   Alt-0           → jump back to window 0 (main)
+#   Alt-o / Alt-w   → orchestrator / watchdog window
+#   Alt-r           → in watch pane: tell the TUI to refresh (sends 'r' is
+#                     ambiguous with retry; skip and rely on TUI's 1s tick)
+# bind-key -n applies server-wide; the if-shell guard checks session name.
+_guard="[ \"#{session_name}\" = \"$session\" ]"
+tmux bind-key -n M-1 if-shell "$_guard" "select-pane -t :.0" "send-keys M-1" 2>/dev/null || true
+tmux bind-key -n M-2 if-shell "$_guard" "select-pane -t :.1" "send-keys M-2" 2>/dev/null || true
+tmux bind-key -n M-0 if-shell "$_guard" "select-window -t :0" "send-keys M-0" 2>/dev/null || true
+tmux bind-key -n M-o if-shell "$_guard" "select-window -t :orchestrator" "send-keys M-o" 2>/dev/null || true
+tmux bind-key -n M-w if-shell "$_guard" "select-window -t :watchdog"     "send-keys M-w" 2>/dev/null || true
+
 tmux select-window -t "$session:0"
 
 if [[ $NO_ATTACH -eq 1 ]]; then
-  echo "session $session created (windows: coordinator + orchestrator)"
+  echo "session $session created (windows: main + orchestrator + watchdog)"
   echo "attach: tmux attach -t $session"
   exit 0
 fi

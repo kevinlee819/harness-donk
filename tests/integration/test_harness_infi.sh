@@ -11,7 +11,7 @@ _kill_session() {
   tmux kill-session -t "$1" 2>/dev/null || true
 }
 
-test_creates_session_with_two_windows() {
+test_creates_session_with_main_orch_watchdog_windows() {
   local parent; parent=$(make_tmp_dir); track_cleanup "$parent"
   local proj; proj=$(make_fixture_project "$parent")
   cd "$proj"
@@ -29,10 +29,11 @@ test_creates_session_with_two_windows() {
     _assert_fail "tmux session not created"
   fi
 
-  # 应有两个 window：coordinator + orchestrator
+  # 应有三个 window：main (coordinator + watch TUI) + orchestrator + watchdog
   local windows; windows=$(tmux list-windows -t "$sess" -F '#{window_index}:#{window_name}' 2>&1)
-  assert_contains "coordinator" "$windows"
+  assert_contains "main" "$windows"
   assert_contains "orchestrator" "$windows"
+  assert_contains "watchdog" "$windows"
 
   # orchestrator window 应有 orchestrator 进程（pane_pid 是 bash launcher，
   # 用 pgrep -P 找子进程的命令行）。注意阶段四后 orchestrator.sh 是 shim — exec 到

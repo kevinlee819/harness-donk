@@ -15,10 +15,19 @@ harness-infi [--no-attach] [--backend <name>] [--model <name>]
 ```
 
 - 行为：在当前目录创建/复用一个 tmux 会话（名 `harness-<sha8(pwd)>`），含三个 window：
-  - **window 0 `coordinator`**：交互式 `claude` 加载 `coordinator/coordinator.md` 为 system prompt，PATH 注入 `coordinator/tools/`（`harness-task` 可用）；底部 split-pane 显示实时状态面板
+  - **window 0 `main`**：分两个 pane —
+    - Pane 0（左，~60%）：交互式 `claude` 加载 `coordinator/coordinator.md` 为 system prompt，PATH 注入 `coordinator/tools/`（`harness-task` 可用）
+    - Pane 1（右，~40%）：`harness watch` 交互式 TUI（见 §1.2.1）
+
+    宿主终端 ≥140 列时**纵向**分割（左右），否则**横向**分割（上下）。用户按 `q` 退出 TUI 时会自动重启，防止 pane 静默死掉。
   - **window 1 `orchestrator`**：长跑 `orchestrator.sh`（无 `--once`），每 5s 轮询 queue；任务来了立刻派
-  - **window 2 `watchdog`**：长跑 `harness-watchdog`，每 10 分钟巡检一次（`HARNESS_WATCHDOG_INTERVAL` 可调）；详见 §8.2
-- 默认 attach 到 window 0；`Ctrl-B 0/1/2` 切窗，`Ctrl-B D` detach 后会话继续存活
+  - **window 2 `watchdog`**：长跑 `harness-watchdog`，每 60s 巡检一次（`HARNESS_WATCHDOG_INTERVAL` 可调）；详见 §8.2
+- 默认 attach 到 window 0。导航（无需 tmux prefix）：
+  - `Alt-1` / `Alt-2`：聚焦左 pane（协调者）/ 右 pane（watch TUI）
+  - `Alt-0`：跳回 `main` 窗口
+  - `Alt-o` / `Alt-w`：orchestrator / watchdog 窗口
+  - tmux 默认仍可用：`Ctrl-B 0/1/2` 切窗，`Ctrl-B D` detach
+  - 注意：Alt 键绑定是 server 级全局的，每次 `harness-infi` 重指向最新会话。同时跑两个 harness 项目时，只有最近一次的 Alt 键有效，其它要用 Ctrl-B 切。
 - 选项：
   - `--no-attach`：仅创建会话（脚本/CI 用），结束后用 `tmux attach -t harness-<hash>` 进入
   - `--backend <name>`：orchestrator 用哪个写者 backend（默 `claude`，需 `adapters/${name}.sh` 存在）
