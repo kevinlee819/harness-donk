@@ -745,7 +745,9 @@ cmd_watch_panel() {
   fi
 
   # ── empty state: show idea snippet or call-to-action ──────
-  if [[ $count -eq 0 ]]; then
+  # Note: $count lives in the pipeline subshell and doesn't propagate back;
+  # use $total_tasks (set via command substitution before the pipe) instead.
+  if [[ $total_tasks -eq 0 ]]; then
     printf "\n"
     if [[ -f "$cwd/specs/initial.md" ]]; then
       local idea
