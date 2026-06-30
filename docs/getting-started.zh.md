@@ -158,14 +158,41 @@ harness 不是一个 AI，是**一个把多个 AI 串起来用、并加上确定
 跑 `harness-infi`（在已 `harness init` 过的项目目录里）：
 
 1. 在 tmux 里建一个名叫 `harness-<项目 hash>` 的会话，有三个窗口：
-   - **window 0 — coordinator**：一个交互式 Claude Code 会话，加载好 coordinator.md（你跟它对话的地方）。
-   - **window 1 — orchestrator**：后台编排器 daemon，每 5 秒轮询队列、调度 worker。
-   - **window 2 — watchdog**：定时巡检 daemon；每 10 分钟检查编排器自己注意不到的问题（编排器进程挂掉、queued 任务被失败依赖卡死、事件未消费堆积），按需弹桌面通知。
+   - **window 0 — main**：左右两个 pane —
+     - 左 pane（~60%）：协调者聊天 —— 一个交互式 Claude Code 会话，加载好 coordinator.md。
+     - 右 pane（~40%）：`harness watch` TUI —— 实时任务列表、选中 worker 详情、状态栏显示协调者最近一次动作。
+
+     终端 ≥ 140 列时是纵向（左右）分割，否则横向（上下）分割。
+   - **window 1 — orchestrator**：后台编排器 daemon，每 5 秒轮询队列、调度 worker。平时不用看；排障时再过来。
+   - **window 2 — watchdog**：定时巡检 daemon；每 60 秒检查编排器自己注意不到的问题（编排器进程挂掉、事件未消费堆积），按需弹桌面通知。
 2. 把你 attach 到 window 0。
 
-之后你的全部交互就是跟 window 0 的协调者对话。`Ctrl-B 1` / `Ctrl-B 2` 看编排器 / watchdog 日志、`Ctrl-B 0` 回来、`Ctrl-B d` detach（三个窗口都继续在后台跑）。
+之后你的视线在 window 0 的两个区域之间：左边聊天，右边实时状态。无需 tmux prefix 的导航键：
+
+| 键 | 作用 |
+|----|------|
+| `Alt-1` / `Alt-2` | 聚焦左（协调者）/ 右（watch TUI）pane |
+| `Alt-0` | 跳回 main 窗口 |
+| `Alt-o` / `Alt-w` | orchestrator / watchdog 窗口 |
+| `Ctrl-B d` | detach（三个窗口继续在后台跑） |
+
+右 pane TUI 里：`j/k` 选任务，`Enter` 钉到详情，`r` retry，`R` force-retry（孤儿用），`c` cancel，`?` 帮助，`q` 退出。完整键位见 [interfaces.zh.md §1.2.1](interfaces.zh.md#121-harness-watch--交互式-tui)。
 
 `-infi` 是 "infinite" 的缩写——它启动一个**长跑会话**而非一次性命令。
+
+### 看懂协调者的输出
+
+协调者用五种视觉前缀，让你一眼判断这条消息要不要看：
+
+| 前缀 | 含义 |
+|------|------|
+| `🫏:` | 回答你的问题——必看 |
+| `💬` | 主动开口（事件触发，不是你问的）——扫一眼标题决定看不看 |
+| `📥` | 短动作回执——信息性，不需要决策 |
+| `⚠` | 升级到你，需要你决策——必看 |
+| `🤖` | 纯动作——不在聊天里，去右 pane 状态栏看 |
+
+一个**简单可靠的检测办法**：当协调者声称做了什么动作（retry / cancel / restart），动作**必须**出现在右 pane 状态栏（`🤖 retried T-001 · 1m ago`）。如果聊天里说"已 retry"但状态栏空着，协调者在编故事。详见 coordinator.md §2.0.1 的契约说明。
 
 ### `harness` 做什么
 

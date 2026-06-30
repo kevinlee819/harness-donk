@@ -159,14 +159,41 @@ Analogy: `harness-infi` is like starting a ship's engine; `harness` is the toolb
 Running `harness-infi` (in a project directory that has been `harness init`-ed):
 
 1. Creates a tmux session named `harness-<project hash>` with three windows:
-   - **window 0 — coordinator**: An interactive Claude Code session with coordinator.md loaded (the place where you chat).
-   - **window 1 — orchestrator**: Background orchestrator daemon, polling the queue every 5 seconds, dispatching workers as tasks arrive.
-   - **window 2 — watchdog**: Periodic supervisor; every 10 minutes it checks for problems the orchestrator can't notice itself (orchestrator process down, queued tasks stuck on a failed dependency, unread events piling up) and fires desktop notifications.
+   - **window 0 — main**: two panes side by side —
+     - Left pane (~60%): the coordinator chat — an interactive Claude Code session with coordinator.md loaded.
+     - Right pane (~40%): the `harness watch` TUI — live task list, selected worker detail, and a status bar showing the coordinator's most recent action.
+
+     Split is vertical (left/right) on terminals ≥ 140 cols wide; horizontal (top/bottom) below that.
+   - **window 1 — orchestrator**: Background orchestrator daemon, polling the queue every 5 seconds, dispatching workers as tasks arrive. You normally don't need to look at this; visit when troubleshooting.
+   - **window 2 — watchdog**: Periodic supervisor; every 60 seconds it checks for problems the orchestrator can't notice itself (orchestrator process down, unread events piling up) and fires desktop notifications.
 2. Attaches you to window 0.
 
-After that, all your interaction is chatting with the coordinator in window 0. `Ctrl-B 1` / `Ctrl-B 2` to peek at the orchestrator / watchdog logs, `Ctrl-B 0` to come back, `Ctrl-B d` to detach (all three windows keep running in the background).
+After that, your eyes split between two zones in window 0: chat on the left, live status on the right. Navigation without tmux prefix:
+
+| Key | Action |
+|-----|--------|
+| `Alt-1` / `Alt-2` | focus left (coordinator) / right (watch TUI) pane |
+| `Alt-0` | jump back to main window |
+| `Alt-o` / `Alt-w` | orchestrator / watchdog windows |
+| `Ctrl-B d` | detach (all windows keep running in the background) |
+
+Inside the right-pane TUI: `j/k` navigate tasks, `Enter` pin to detail, `r` retry, `R` force-retry (for orphans), `c` cancel, `?` help, `q` quit. See [interfaces.md §1.2.1](interfaces.md#121-harness-watch--interactive-tui) for the full keymap.
 
 `-infi` is short for "infinite" — it starts a **long-running session** rather than a one-shot command.
+
+### Reading the Coordinator's Output
+
+The coordinator uses five visual prefixes so you can tell at a glance whether a line needs your attention:
+
+| Prefix | Meaning |
+|--------|---------|
+| `🫏:` | reply to your question — must-read |
+| `💬` | proactive (event-driven, not user-prompted) — scan the headline |
+| `📥` | short action receipt — informational, no decision needed |
+| `⚠` | escalation requiring your decision — must-read |
+| `🤖` | pure action — not in chat, look at the status bar in the right pane instead |
+
+A useful sanity check: **when the coordinator claims it did something** (retried, cancelled, restarted), the action **must show up in the right-pane status bar** (`🤖 retried T-001 · 1m ago`). If the chat says "已 retry" but the status bar is empty, the coordinator is making it up. See coordinator.md §2.0.1 for the contract.
 
 ### What `harness` Does
 

@@ -34,7 +34,9 @@
 │       ├── harness_task.py             # 协调者工具实现
 │       ├── db_cli.py                   # bash 调用桥（harness-db <subcmd>）
 │       ├── orchestrator_cli.py         # console script: harness-orchestrator
-│       └── watchdog.py                 # 单次 watchdog tick（由 bin/harness-watchdog 循环调用）
+│       ├── watchdog.py                 # 单次 watchdog tick（由 bin/harness-watchdog 循环调用）
+│       ├── watch_tui.py                # `harness watch` 交互式 curses TUI（只读 DB）
+│       └── statusline.py               # Claude Code statusLine 渲染器
 │
 ├── coordinator/                        # 协调者武装包
 │   ├── coordinator.md                  # 协调者 system prompt / 打扰策略（自然语言定义）

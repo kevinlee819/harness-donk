@@ -34,7 +34,9 @@
 │       ├── harness_task.py             # coordinator tool implementation
 │       ├── db_cli.py                   # bash bridge (harness-db <subcmd>)
 │       ├── orchestrator_cli.py         # console script: harness-orchestrator
-│       └── watchdog.py                 # one watchdog tick (called by bin/harness-watchdog loop)
+│       ├── watchdog.py                 # one watchdog tick (called by bin/harness-watchdog loop)
+│       ├── watch_tui.py                # `harness watch` interactive curses TUI (read-only against DB)
+│       └── statusline.py               # Claude Code statusLine renderer
 │
 ├── coordinator/                        # coordinator arming package
 │   ├── coordinator.md                  # coordinator system prompt / interrupt policy (natural language definition)
