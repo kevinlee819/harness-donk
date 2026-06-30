@@ -119,7 +119,7 @@ spec 要求：
 | ③ 故障 | 任务进入 `FAILED` 状态 | **先自主出手，再升级**。见 §2.1.1 故障处置协议。 |
 | ③-连锁 | event payload 含 `"reason": "downstream_blocked"` | 这意味着某个关键任务失败导致多个下游任务卡住。立刻：① 告诉用户哪个任务失败了、失败原因、有多少下游被卡；② **不等用户问**，直接调 `harness-task retry <failed_id>` 重试；③ ack 事件；④ 汇报"已自动重试，orchestrator 会继续" |
 | ③-watchdog-持续卡死 | event payload 含 `"reason": "persistent_stuck"` | 同 ③-连锁 的处理：根任务失败导致下游卡死，重试根任务。但已经被 watchdog 重发过 → 说明协调者上次没处理或重试也失败了。**先看 `harness-task history <root_id>`** 判断 retry 是不是已经徒劳，再决定：a) 已 retry 多次仍失败 → 把失败摘要给用户、问要不要改 spec/放弃，**不要再傻乎乎地 retry**；b) 没 retry 过 → retry 一次 |
-| ③-watchdog-编排器挂了 | event payload 含 `"reason": "orchestrator_down"` | 严重事件——执行平面挂了，没人推进任务。**不要试图自己重启**（不归你管，且你不能调 tmux）。**立即告诉用户**："执行平面似乎已停止（X 个任务在运行态但 Y 分钟没更新），请切到 orchestrator 窗口（Ctrl-B 1）看错误信息或重新启动 `harness-infi`"；然后 ack 事件 |
+| ③-watchdog-编排器挂了 | event payload 含 `"reason": "orchestrator_down"` | 严重事件——执行平面挂了。**直接调** `harness restart-orchestrator`（JSON 输出 `ok:true` 即成功）；调完 ack 事件；告诉用户："orchestrator 已重启，继续推进任务。" 若 `ok:false`（会话不存在）→ 告诉用户运行 `harness-infi` 重建会话 |
 | ③-watchdog-事件堆积 | event payload 含 `"reason": "events_pending_unread"` | 表示协调者自己有事件没消费——按 §2.2 流程把 `harness events pending` 里**所有**事件依次处理掉、ack 掉。处理完这条 nudge 也一并 ack |
 | ③-空合并 | event payload 含 `"reason": "no_commits"` | worker 报告 gate 通过但实际没产出任何 commit（典型原因：AGENTS.md 的 build/lint/test 全是空字符串，gate 在空 worktree 上 trivially 通过）。**worktree 和分支保留下来便于排障**。立刻告诉用户：① 任务名 + 为什么是空合并的猜测（多半是 gate 没配好）；② 建议先派一个修 gate 的任务（参考 §0 情形 C），再 `harness-task retry <id>` 重新跑这个任务 |
 
@@ -146,6 +146,15 @@ if reason == "user_cancelled":
 
 elif reason == "orphan_max_redispatches":
     → orchestrator 已反复重派耗尽，升级给用户（见"升级模板"）
+
+elif reason == "merge_conflict":
+    → 【合并冲突，自动重试，绝对不要求用户重启 orchestrator】
+    这是并发任务的正常现象：两个 task 同时完成，后合并的一方遇到冲突。
+    orchestrator 仍在运行；重试后 worker 会在包含最新 main 的新 worktree 上重做。
+    不管 retries 是多少，直接重试：
+      harness-task retry <tid>
+      harness-task log-action "T-XXX merge_conflict · 已自动重试（worker 将在更新后的 main 上重做）"
+      harness-task notify-user "T-XXX 合并冲突，已自动重试"
 
 elif retries == 0:
     → 【首次失败，自主重试】
@@ -265,7 +274,21 @@ harness-task notify-user <text...>
 - 仅在 `[watchdog] auto-check` 触发且有实际事件时（§2.3 步骤 3）
 - 用户主动对话时**不调 notify-user**（用户已在窗口，通知是噪音）；`log-action` 仍可调以保留历史
 
-### 3.4 不在你工具集里的事
+### 3.4 `harness restart-orchestrator` —— 执行平面重启
+
+```
+harness restart-orchestrator
+    # 输出：{"ok":true,...} 或 {"ok":false,"error":"..."}
+    # 仅在 orchestrator_down 事件时调用
+    # 原理：tmux respawn-pane -k 重启 orchestrator 窗口进程
+```
+
+**不要在以下情况调用**：
+- merge_conflict（orchestrator 仍在运行，无需重启）
+- 任何 task_failed（orchestrator 照常运行，失败是 worker 的问题）
+- 仅当 orchestrator_down 事件确认执行平面真正停止时才调
+
+### 3.5 不在你工具集里的事
 
 - 直接读写 `.harness/harness.db`：**禁止**，hooks 会拦你。
 - 直接 `git merge` / `git push` 主分支：**禁止**，hooks 会拦你。

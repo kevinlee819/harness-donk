@@ -787,6 +787,27 @@ cmd_statusline() {
   exec "$HARNESS_PYTHON" -m harness.cli.statusline "$@"
 }
 
+cmd_restart_orchestrator() {
+  # Restart the orchestrator pane in the harness tmux session.
+  # Used by the coordinator when orchestrator_down is detected.
+  # Safe to call even if orchestrator is still running (respawn-pane -k kills it first).
+  local cwd; cwd=$(pwd)
+  local hash; hash=$(printf '%s' "$cwd" | shasum -a 256 | cut -c1-8)
+  local session="harness-$hash"
+
+  if ! tmux has-session -t "$session" 2>/dev/null; then
+    echo "{\"ok\":false,\"error\":\"no harness session for this project (expected: $session)\"}"
+    exit 1
+  fi
+
+  if tmux respawn-pane -t "$session:orchestrator" -k 2>/dev/null; then
+    echo "{\"ok\":true,\"session\":\"$session\",\"pane\":\"orchestrator\"}"
+  else
+    echo "{\"ok\":false,\"error\":\"respawn-pane failed — session $session may not have an orchestrator window\"}"
+    exit 1
+  fi
+}
+
 cmd_help() {
   # 'EOF' 单引号关闭变量/命令替换 —— help 文本里有 $(harness ...) 示例，
   # 不引号会被 bash 当命令执行（一直 stderr 报 "harness: command not found"）
@@ -809,6 +830,7 @@ Commands:
   attach                  attach 到协调者 tmux 会话（无参）
   attach <wid> [--path]   worker 现场快照（worker 是 Python 线程，非独立 pane）；
                           --path 仅打印 worktree 路径，便于 cd "$(harness attach w1 --path)"
+  restart-orchestrator    重启 orchestrator pane（仅在 orchestrator 真正挂掉时使用）
   upgrade                 拉最新源码 + uv sync + 重做符号链接（git pull --ff-only）
   statusline              Claude Code statusline 渲染器（接 stdin JSON，输出一行 ANSI）；
                           一般不直接调，由协调者 .claude/settings.json 自动调用
@@ -833,6 +855,7 @@ case "$cmd" in
   upgrade) cmd_upgrade "$@" ;;
   watch-panel) cmd_watch_panel "$@" ;;
   statusline) cmd_statusline "$@" ;;
+  restart-orchestrator) cmd_restart_orchestrator "$@" ;;
   help|-h|--help|"") cmd_help ;;
   *) echo "unknown command: $cmd" >&2; cmd_help; exit 1 ;;
 esac
