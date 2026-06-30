@@ -4,6 +4,8 @@ Three outputs:
   1. INSERT into events table (db.event_write)
   2. JSON file under <project>/.harness/events/<ts>-<event_type>-<task_id>.json
   3. fire-and-forget hooks/notification.sh
+  4. tmux send-keys poke into coordinator pane (if idle) so it reacts without
+     waiting for the user to type a message.
 
 See docs/interfaces.md §8.1.
 """
@@ -11,8 +13,11 @@ See docs/interfaces.md §8.1.
 from __future__ import annotations
 
 import datetime
+import hashlib
 import os
+import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -20,6 +25,10 @@ from harness import db
 from harness.atomic_write import write_json
 
 ALLOWED = {"needs_decision", "task_completed", "task_failed", "budget_exceeded"}
+
+# Debounce: don't inject more than once per N seconds across all threads.
+_last_poke_time: float = 0.0
+_POKE_DEBOUNCE_S: float = 15.0
 
 
 def _project_dir() -> Path:
@@ -36,6 +45,68 @@ def _now_iso() -> str:
 
 def _now_compact() -> str:
     return datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+
+
+def _session_name(proj_dir: Path) -> str:
+    """Derive the harness-infi tmux session name for a project directory.
+
+    Must match the formula in bin/harness-infi:
+        hash=$(printf '%s' "$cwd" | shasum -a 256 | cut -c1-8)
+        session="harness-$hash"
+    """
+    hash8 = hashlib.sha256(str(proj_dir).encode()).hexdigest()[:8]
+    return f"harness-{hash8}"
+
+
+def _poke_coordinator_if_idle(proj_dir: Path) -> None:
+    """Inject '[watchdog] auto-check' into the coordinator pane if it looks idle.
+
+    'Idle' means Claude Code is showing an empty input prompt (user hasn't
+    started typing and Claude isn't generating). This prevents garbling
+    in-progress user input.
+
+    Fire-and-forget: all errors are silently swallowed.
+    """
+    global _last_poke_time
+    now = time.time()
+    if now - _last_poke_time < _POKE_DEBOUNCE_S:
+        return
+
+    session = _session_name(proj_dir)
+    pane = f"{session}:coordinator.0"
+    try:
+        # Quick existence check
+        r = subprocess.run(
+            ["tmux", "has-session", "-t", session],
+            capture_output=True, timeout=2,
+        )
+        if r.returncode != 0:
+            return
+
+        # Capture last line of coordinator pane to detect idle prompt
+        r2 = subprocess.run(
+            ["tmux", "capture-pane", "-t", pane, "-p"],
+            capture_output=True, text=True, timeout=2,
+        )
+        if r2.returncode != 0:
+            return
+        lines = [l for l in r2.stdout.splitlines() if l.strip()]
+        if not lines:
+            return
+        last = lines[-1]
+        # Claude Code's input prompt is "> " with nothing after it when idle.
+        # If user has typed something, last will be "> <their text>".
+        if not re.match(r"^\s*>\s*$", last):
+            return
+
+        _last_poke_time = now
+        subprocess.Popen(
+            ["tmux", "send-keys", "-t", pane, "[watchdog] auto-check", "Enter"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        pass
 
 
 def notify(event_type: str, task_id: Optional[str], payload: dict) -> int:
@@ -74,5 +145,12 @@ def notify(event_type: str, task_id: Optional[str], payload: dict) -> int:
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
             )
+
+    # Poke the coordinator pane so it processes this event without waiting
+    # for the user to send a message first.
+    try:
+        _poke_coordinator_if_idle(_project_dir())
+    except Exception:
+        pass
 
     return eid
