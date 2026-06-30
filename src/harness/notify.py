@@ -59,8 +59,16 @@ def _session_name(proj_dir: Path) -> str:
     return f"harness-{hash8}"
 
 
+POKE_SENTINEL = "🔔"
+"""Single-emoji trigger we inject into the coordinator pane to wake Claude up
+without polluting the chat history. Coordinator.md §2.3 treats this as
+'process events, respond only if needed, never echo.' Kept short on purpose:
+the user WILL see it once in their scrollback per fire — `[watchdog] auto-check`
+was 21 chars per fire, which adds up fast on a busy day."""
+
+
 def _poke_coordinator_if_idle(proj_dir: Path) -> None:
-    """Inject '[watchdog] auto-check' into the coordinator pane if it looks idle.
+    """Inject the wake sentinel into the coordinator pane if it looks idle.
 
     'Idle' means Claude Code is showing an empty input prompt (user hasn't
     started typing and Claude isn't generating). This prevents garbling
@@ -74,7 +82,9 @@ def _poke_coordinator_if_idle(proj_dir: Path) -> None:
         return
 
     session = _session_name(proj_dir)
-    pane = f"{session}:coordinator.0"
+    # Pane addressing uses window INDEX (0), not name — the window used to be
+    # called `coordinator` but is now `main`; index is rename-proof.
+    pane = f"{session}:0.0"
     try:
         # Quick existence check
         r = subprocess.run(
@@ -102,7 +112,7 @@ def _poke_coordinator_if_idle(proj_dir: Path) -> None:
 
         _last_poke_time = now
         subprocess.Popen(
-            ["tmux", "send-keys", "-t", pane, "[watchdog] auto-check", "Enter"],
+            ["tmux", "send-keys", "-t", pane, POKE_SENTINEL, "Enter"],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )

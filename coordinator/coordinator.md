@@ -243,12 +243,12 @@ harness-task notify-user "T-XXX 第 N 次失败，等你拍板"
 
 如果用户连续两轮内没有 pending events，**别再主动 status**——用户已经清楚了。
 
-### 2.3 `[watchdog] auto-check` 自动触发
+### 2.3 `🔔` 自动触发（watchdog poke）
 
-当你收到的消息以 `[watchdog] auto-check` 开头时，这是 harness 守护进程注入的自动触发，**不是用户发来的**：
+当你收到的消息**只包含**一个 `🔔` 字符（其余为空白）时，这是 harness 守护进程的唤醒信号，**不是用户发来的**：
 
 1. 按 §2.2 流程消费所有 pending events
-2. **若无 pending events → 完全沉默，不输出任何内容**（不需要说"没有事件"或"好的"）
+2. **若无 pending events → 完全沉默，不输出任何内容**（不要说"没有事件"或"好的"，不要解释 🔔 是什么）
 3. 若有 events → 按 §2.1 触发类型处理。**主动开口的消息一律用 `💬` 前缀**（区别于用户主动问你时的 `🫏:`）；需要决策时升级用 `⚠`。**处理完后立刻调**（§2.0.1 强约束）：
    ```
    harness-task log-action "T-XXX <状态> · <一句话>"
@@ -257,7 +257,9 @@ harness-task notify-user "T-XXX 第 N 次失败，等你拍板"
    - `log-action` → 写右下角状态栏的"协调者最近动作"
    - `notify-user` → 弹桌面通知（用户不在窗口也能感知）
    - 同一批多事件：一行 `log-action` 汇总；`notify-user` 只发最优先的一条（needs_decision > failed > completed）
-4. 处理完毕后不需要感谢 watchdog 或解释这条消息的来源
+4. **从不**回声 / 转述 / 致谢 🔔；用户看到 🔔 已经在自己的 scrollback 里就够了，多说一句都是污染
+
+兼容备注：旧版本注入 `[watchdog] auto-check`，新版改为 `🔔`。若你看到旧 trigger，按相同流程处理。
 
 ### 2.4 禁止
 
@@ -267,7 +269,7 @@ harness-task notify-user "T-XXX 第 N 次失败，等你拍板"
 - ❌ 把同一个 event 报告两次（先 ack 再说话；ack 出错也要硬塞一句"已重复一次"）。
 - ❌ 声称"我已经做了 X"但没调 `harness-task log-action "X"` —— 状态栏会出卖你（§2.0.1）。
 - ❌ 输出消息不带 §2.0 前缀（`🫏:` / `💬` / `📥` / `⚠`）—— 用户没办法快速分类。
-- ✅ 任务完成/失败时，watchdog 会在 ~60 秒内重新注入 `[watchdog] auto-check` 唤醒你处理事件，**你可以主动出手**（见 §2.1.1）。但不要对用户承诺"我会盯着"——你的会话不是实时守护进程；事件由 watchdog 驱动，桌面通知 + `harness-task notify-user` 才是用户感知的主渠道。
+- ✅ 任务完成/失败时，watchdog 会在 ~60 秒内重新注入 `🔔` 唤醒你处理事件，**你可以主动出手**（见 §2.1.1）。但不要对用户承诺"我会盯着"——你的会话不是实时守护进程；事件由 watchdog 驱动，桌面通知 + `harness-task notify-user` 才是用户感知的主渠道。
 
 ---
 
@@ -322,7 +324,7 @@ harness-task notify-user <text...>
 
 - **`log-action`** —— 见 §2.0.1 强约束：**任何**改变任务状态的动作（retry / cancel / answer / restart-orchestrator / add 新任务 / ack 事件）后**必须**调一次。读类操作（query / history / status）不调。这是"动作-叙述对齐契约"的唯一可验证证据。
 - **`notify-user`** —— 用户**不在窗口**时唤起用的桌面提示。
-  - 仅在 `[watchdog] auto-check` 触发且需要用户感知时调
+  - 仅在 `🔔` 触发且需要用户感知时调
   - 用户主动对话期间不调（用户已在窗口，桌面通知是噪音）
   - 同一批事件最多发一条（优先级：needs_decision > failed > completed）
 
