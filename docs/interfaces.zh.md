@@ -91,6 +91,8 @@ TUI 自己**不**直接写 `harness.db`。
 
 最低终端：60 × 8。低于此尺寸只显示提示，等待 `q`。
 
+**实时活动流（codex backend）**：详情 pane 会 tail worker 的流式事件文件 `.harness/workers/<wid>/codex.events.jsonl`（由 `adapters/codex.sh` 实时写入），把最近 ~6 条事件每行一条渲染出来——推理 (`💭`)、shell 调用 (`$`)、文件编辑 (`✏️`)、agent 输出 (`💬`)、turn 分隔 (`▸` / `✓`)。这就是「worker 现在到底在干啥」的直接信号，每秒刷新一次。claude backend 暂不支持（claude.sh 还没切到 stream-json）。
+
 ### 1.2.2 `harness activity` —— 协调者活动日志查看器
 
 `.harness/logs/coordinator-activity.log` 的可滚动历史视图。右 pane 状态栏只显示**最新**一条；这个命令让你看到**全部**历史。

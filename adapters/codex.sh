@@ -170,8 +170,19 @@ command -v codex >/dev/null 2>&1 || { echo "codex CLI not found" >&2; exit 1; }
 _acquire_lock || exit 2
 
 LAST_MSG=$(mktemp -t codex-last.XXXXXX)
-EVENTS=$(mktemp -t codex-events.XXXXXX)
-trap '_release_lock; rm -f "$LAST_MSG" "$EVENTS"' EXIT INT TERM
+# Place the streaming events file inside the worker directory when known, so
+# the watch TUI (and any other reader) can tail it in real time. The previous
+# /tmp/mktemp location was unfindable from outside this process. Fall back to
+# /tmp when ADAPTER_WORKER_DIR is unset (mock / dry-run paths).
+if [[ -n "$ADAPTER_WORKER_DIR" ]]; then
+  mkdir -p "$ADAPTER_WORKER_DIR"
+  EVENTS="$ADAPTER_WORKER_DIR/codex.events.jsonl"
+  : > "$EVENTS"   # truncate stale data from a prior attempt (retries / orphan reap)
+  trap '_release_lock; rm -f "$LAST_MSG"' EXIT INT TERM
+else
+  EVENTS=$(mktemp -t codex-events.XXXXXX)
+  trap '_release_lock; rm -f "$LAST_MSG" "$EVENTS"' EXIT INT TERM
+fi
 
 # 构造命令。源码学到的几条要点（codex-rs/exec/src/lib.rs 与 cli.rs）：
 #   (1) `exec` 的子命令选项（特别是 `-C/--cd`）必须放在 `resume` 子命令**之前**，

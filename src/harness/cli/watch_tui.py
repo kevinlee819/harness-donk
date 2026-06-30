@@ -48,6 +48,98 @@ def _read_status_json(project: Path, worker_id: str) -> dict:
         return {}
 
 
+def _read_worker_activity(project: Path, worker_id: str,
+                          limit: int = 8) -> tuple[list[str], Optional[float]]:
+    """Return (last N human-readable activity lines, file_mtime_epoch).
+
+    Reads `.harness/workers/<wid>/codex.events.jsonl` (written by adapters/codex.sh)
+    and converts each codex JSONL event into a short summary. Returns ([], None)
+    when there's no activity file yet (no worker, claude backend, brand-new task).
+
+    Defensive against partial writes (last line may be truncated): tolerated by
+    json.loads + try/except per line.
+    """
+    if not worker_id:
+        return [], None
+    f = project / ".harness" / "workers" / worker_id / "codex.events.jsonl"
+    if not f.is_file():
+        return [], None
+    try:
+        mtime = f.stat().st_mtime
+        # Read at most the last ~32KB. Codex JSONL lines are ≤2KB each in
+        # practice, so this gives us > 16 events of context.
+        size = f.stat().st_size
+        with open(f, "rb") as fh:
+            fh.seek(max(0, size - 32_768))
+            raw = fh.read().decode("utf-8", errors="replace")
+    except OSError:
+        return [], None
+    # Discard the first (possibly partial) line if we did the tail seek
+    lines = raw.splitlines()
+    if size > 32_768 and lines:
+        lines = lines[1:]
+    out: list[str] = []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            ev = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        rendered = _render_codex_event(ev)
+        if rendered:
+            out.append(rendered)
+    return out[-limit:], mtime
+
+
+def _render_codex_event(ev: dict) -> Optional[str]:
+    """Map a codex JSONL event to one human-readable line. Returns None to skip.
+
+    Event taxonomy (codex 0.142+):
+      thread.started        — session bookkeeping; skipped (no signal for user)
+      turn.started/completed — turn-level boundary
+      item.started/completed — finer-grained items within a turn:
+        item.type = agent_message      → user-visible model text
+        item.type = reasoning          → model's hidden thinking
+        item.type = exec_command_call  → shell command
+        item.type = file_change_call   → write/edit a file
+    Unknown event types are silently dropped.
+    """
+    t = ev.get("type", "")
+    item = ev.get("item") or {}
+    it = item.get("type", "")
+    if t == "turn.started":
+        return "▸ turn started"
+    if t == "turn.completed":
+        usage = ev.get("usage") or {}
+        in_tok = usage.get("input_tokens", 0)
+        out_tok = usage.get("output_tokens", 0)
+        return f"✓ turn done  ({in_tok} in, {out_tok} out tok)"
+    if t in ("item.started", "item.completed"):
+        # Prefer text from `.completed` (final) — `started` may have only the prompt
+        if it == "agent_message":
+            txt = (item.get("text") or "").strip()
+            if not txt:
+                return None
+            return f"💬 {txt[:80]}"
+        if it == "reasoning":
+            txt = (item.get("text") or "").strip()
+            if not txt:
+                return None
+            return f"💭 {txt[:80]}"
+        if it in ("exec_command_call", "shell_call", "command"):
+            cmd = (item.get("command") or item.get("cmd")
+                   or item.get("args") or "?")
+            if isinstance(cmd, list):
+                cmd = " ".join(str(x) for x in cmd)
+            return f"$ {str(cmd)[:80]}"
+        if it in ("file_change_call", "edit", "write"):
+            path = item.get("path") or item.get("file") or "?"
+            return f"✏️  {path}"
+    return None
+
+
 def _spec_title(project: Path, task_id: str) -> str:
     """First `# heading` from specs/<id>.md, skipping YAML frontmatter. Falls back to id."""
     spec = project / "specs" / f"{task_id}.md"
@@ -422,7 +514,7 @@ def _render_detail(stdscr, y0: int, y_max: int, tid: str, project: Path,
     _addstr_clip(stdscr, y0 + 2, 2, title,
                  curses.color_pair(PAIRS["DIM"]) | curses.A_DIM)
 
-    # Line 4+: live status.json (turns/files/progress/updated)
+    # Line 4: live status.json (turns/files/progress/updated)
     status_json = _read_status_json(project, wid)
     if status_json:
         upd_age = ""
@@ -438,22 +530,49 @@ def _render_detail(stdscr, y0: int, y_max: int, tid: str, project: Path,
         _addstr_clip(stdscr, y0 + 4, 2, live,
                      curses.color_pair(PAIRS["CYAN"]))
 
-    # Transitions table — most recent N from db.query_history
+    # Layout below: live activity (variable, up to ~6 rows) + transitions (last 2)
+    cur_y = y0 + 6
+    activity_lines, act_mtime = _read_worker_activity(project, wid, limit=8)
+    if activity_lines:
+        age_str = ""
+        if act_mtime is not None:
+            age_str = "  ·  " + _age_human(max(0, time.time() - act_mtime)) + " ago"
+        header = f"Live activity (codex){age_str}"
+        _addstr_clip(stdscr, cur_y, 2, header,
+                     curses.color_pair(PAIRS["DIM"]))
+        cur_y += 1
+        for line in activity_lines:
+            if cur_y >= y_max:
+                break
+            # Mute color so the user's eye lands on the latest line (last drawn)
+            attr = curses.color_pair(PAIRS["DIM"])
+            if line.startswith("✓"):
+                attr = curses.color_pair(PAIRS["GREEN"])
+            elif line.startswith("$") or line.startswith("✏"):
+                attr = curses.color_pair(PAIRS["CYAN"])
+            elif line.startswith("⚠"):
+                attr = curses.color_pair(PAIRS["RED"])
+            _addstr_clip(stdscr, cur_y, 2, "  " + line, attr)
+            cur_y += 1
+        cur_y += 1  # gap before transitions
+
+    # Transitions — keep only the last 2 since activity above gives more signal
     try:
         hist = db.query_history(tid)
     except Exception:
         hist = []
-    if hist:
-        _addstr_clip(stdscr, y0 + 6, 2, "Transitions (most recent first):",
+    if hist and cur_y < y_max - 1:
+        _addstr_clip(stdscr, cur_y, 2, "Transitions (most recent first):",
                      curses.color_pair(PAIRS["DIM"]))
-        for i, (ts, from_s, to_s, reason) in enumerate(reversed(hist[-5:])):
-            yy = y0 + 7 + i
-            if yy >= y_max:
+        cur_y += 1
+        for ts, from_s, to_s, reason in reversed(hist[-2:]):
+            if cur_y >= y_max:
                 break
             t = ts.split("T")[-1].rstrip("Z") if "T" in ts else ts
             line = f"  {t}  {from_s or '·':<10} → {to_s:<10}  {reason or ''}"
-            _addstr_clip(stdscr, yy, 2, line,
+            _addstr_clip(stdscr, cur_y, 2, line,
                          curses.color_pair(PAIRS["DIM"]))
+            cur_y += 1
 
 
 def _invoke_action(project: Path, args: list[str]) -> tuple[bool, str]:

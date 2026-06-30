@@ -92,6 +92,14 @@ truth. The TUI never writes to `harness.db` directly.
 
 Minimum terminal: 60 × 8. Below that it prints a message and waits for `q`.
 
+**Live activity feed (codex backend):** the detail pane tails the worker's
+streaming events file at `.harness/workers/<wid>/codex.events.jsonl` (written
+by `adapters/codex.sh` in real time) and renders the last ~6 events as one
+line each — reasoning (`💭`), shell calls (`$`), file edits (`✏️`), agent
+messages (`💬`), turn boundaries (`▸`/`✓`). This is what "the worker is
+actually doing right now" looks like, refreshed every 1s. Empty for claude
+backend until claude.sh learns to emit stream-json.
+
 ### 1.2.2 `harness activity` — coordinator activity log viewer
 
 Scrollable history of `.harness/logs/coordinator-activity.log`. The right-pane
