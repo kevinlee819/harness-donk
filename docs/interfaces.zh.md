@@ -52,6 +52,8 @@ harness watchdog-tick                    # 手动跑一次 watchdog 巡检（详
 harness attach [<worker_id>]             # attach 到 tmux（无参 = 协调者会话）
 harness watch                            # 交互式 TUI：任务列表 + worker 详情 + 状态栏
                                          # 详见 §1.2.1 键位
+harness activity                         # 协调者活动日志的滚动视图
+                                         # 详见 §1.2.2；harness-infi 内 Alt-l 唤起 popup
 harness backup                           # sqlite3 .backup → .harness/backups/harness-<ts>.db
                                          # 含保留策略（默 7 天，HARNESS_BACKUP_RETAIN_DAYS 可调）
 harness run-once [--mock] [--backend N] [--model M] [--max-retries N]
@@ -88,6 +90,23 @@ curses 实现的仪表盘。终端内三个区：
 TUI 自己**不**直接写 `harness.db`。
 
 最低终端：60 × 8。低于此尺寸只显示提示，等待 `q`。
+
+### 1.2.2 `harness activity` —— 协调者活动日志查看器
+
+`.harness/logs/coordinator-activity.log` 的可滚动历史视图。右 pane 状态栏只显示**最新**一条；这个命令让你看到**全部**历史。
+
+| 键 | 作用 |
+|----|------|
+| `j` / `↓` | 下一条 |
+| `k` / `↑` | 上一条 |
+| `g` / `G` | 跳首（最新）/ 跳尾（最老） |
+| `PgUp` / `PgDn` | 翻页 |
+| `r` | 强制重读文件 |
+| `q` / `Esc` | 退出 |
+
+按协调者前缀着色：`⚠` 红+粗，`🤖` 青，`💬` 黄，`📥` 暗。每 2 s 自动刷新。
+
+在 `harness-infi` 会话内按 `Alt-l` 可作为 tmux popup 覆盖层唤出（需 tmux ≥ 3.2；低版本静默忽略）。
 
 ---
 

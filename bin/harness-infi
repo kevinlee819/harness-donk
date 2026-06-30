@@ -10,7 +10,8 @@
 #   3. window 1 (orchestrator): 后台执行平面，长跑 orchestrator.sh
 #   4. window 2 (watchdog): 60s 心跳巡检
 #   5. attach 到 main window；左右键切 pane 用 Alt-1 / Alt-2（无需 tmux prefix）
-#      切窗口：Alt-0 main / Alt-` next / Ctrl-b 1 = orchestrator / Ctrl-b 2 = watchdog
+#      切窗口：Alt-0 main / Alt-o orchestrator / Alt-w watchdog
+#      唤起活动日志覆盖层：Alt-l（display-popup，需 tmux ≥ 3.2）
 #
 # 选项：
 #   --no-attach        创建会话但不 attach（脚本/CI 用）
@@ -223,6 +224,12 @@ tmux bind-key -n M-2 if-shell "$_guard" "select-pane -t :.1" "send-keys M-2" 2>/
 tmux bind-key -n M-0 if-shell "$_guard" "select-window -t :0" "send-keys M-0" 2>/dev/null || true
 tmux bind-key -n M-o if-shell "$_guard" "select-window -t :orchestrator" "send-keys M-o" 2>/dev/null || true
 tmux bind-key -n M-w if-shell "$_guard" "select-window -t :watchdog"     "send-keys M-w" 2>/dev/null || true
+# M-l opens the activity-log viewer in a popup (tmux ≥ 3.2). The popup overlays
+# the current pane; press 'q' inside to dismiss. Falls back silently on
+# older tmux versions.
+tmux bind-key -n M-l if-shell "$_guard" \
+  "display-popup -E -h 80% -w 80% -d '$cwd' '$HARNESS_HOME/bin/harness' activity" \
+  "send-keys M-l" 2>/dev/null || true
 
 tmux select-window -t "$session:0"
 

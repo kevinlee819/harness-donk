@@ -36,6 +36,7 @@
 │       ├── orchestrator_cli.py         # console script: harness-orchestrator
 │       ├── watchdog.py                 # 单次 watchdog tick（由 bin/harness-watchdog 循环调用）
 │       ├── watch_tui.py                # `harness watch` 交互式 curses TUI（只读 DB）
+│       ├── activity_tui.py             # `harness activity` —— coordinator-activity.log 滚动查看器
 │       └── statusline.py               # Claude Code statusLine 渲染器
 │
 ├── coordinator/                        # 协调者武装包

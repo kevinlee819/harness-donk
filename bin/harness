@@ -831,6 +831,7 @@ Commands:
   attach <wid> [--path]   worker 现场快照（worker 是 Python 线程，非独立 pane）；
                           --path 仅打印 worktree 路径，便于 cd "$(harness attach w1 --path)"
   watch                   交互式 TUI：任务列表 + worker 详情 + 协调者动作 (j/k 导航)
+  activity                协调者活动日志覆盖 (.harness/logs/coordinator-activity.log)
   restart-orchestrator    重启 orchestrator pane（仅在 orchestrator 真正挂掉时使用）
   upgrade                 拉最新源码 + uv sync + 重做符号链接（git pull --ff-only）
   statusline              Claude Code statusline 渲染器（接 stdin JSON，输出一行 ANSI）；
@@ -856,6 +857,7 @@ case "$cmd" in
   upgrade) cmd_upgrade "$@" ;;
   watch-panel) cmd_watch_panel "$@" ;;
   watch) exec "$HARNESS_PYTHON" -m harness.cli.watch_tui "$@" ;;
+  activity) exec "$HARNESS_PYTHON" -m harness.cli.activity_tui "$@" ;;
   statusline) cmd_statusline "$@" ;;
   restart-orchestrator) cmd_restart_orchestrator "$@" ;;
   help|-h|--help|"") cmd_help ;;

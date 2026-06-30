@@ -52,6 +52,8 @@ harness watchdog-tick                    # run one watchdog cycle manually (see 
 harness attach [<worker_id>]             # attach to tmux (no argument = coordinator session)
 harness watch                            # interactive TUI: task list + worker detail + status bar
                                          # see §1.2.1 for keybindings
+harness activity                         # scrollable view of coordinator-activity.log
+                                         # see §1.2.2; Alt-l opens it as popup inside harness-infi
 harness backup                           # sqlite3 .backup → .harness/backups/harness-<ts>.db
                                          # includes retention policy (default 7 days, HARNESS_BACKUP_RETAIN_DAYS adjustable)
 harness run-once [--mock] [--backend N] [--model M] [--max-retries N]
@@ -89,6 +91,27 @@ Actions (`r`, `R`, `c`) shell out to `harness-task`; the DB is the only source o
 truth. The TUI never writes to `harness.db` directly.
 
 Minimum terminal: 60 × 8. Below that it prints a message and waits for `q`.
+
+### 1.2.2 `harness activity` — coordinator activity log viewer
+
+Scrollable history of `.harness/logs/coordinator-activity.log`. The right-pane
+status bar shows only the most recent action; this command shows every action
+ever logged.
+
+| Key | Action |
+|-----|--------|
+| `j` / `↓` | next entry |
+| `k` / `↑` | prev entry |
+| `g` / `G` | first (most recent) / last (oldest) |
+| `PgUp` / `PgDn` | page nav |
+| `r` | force-reload from disk |
+| `q` / `Esc` | quit |
+
+Entries are colored by the coordinator's prefix (`⚠` red-bold, `🤖` cyan,
+`💬` yellow, `📥` dim). Refreshes every 2 s.
+
+From inside a `harness-infi` session, press `Alt-l` to open this as a tmux
+popup overlay (requires tmux ≥ 3.2; falls through silently below that).
 
 ---
 

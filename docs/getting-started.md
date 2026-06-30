@@ -175,6 +175,7 @@ After that, your eyes split between two zones in window 0: chat on the left, liv
 | `Alt-1` / `Alt-2` | focus left (coordinator) / right (watch TUI) pane |
 | `Alt-0` | jump back to main window |
 | `Alt-o` / `Alt-w` | orchestrator / watchdog windows |
+| `Alt-l` | open coordinator activity log as a popup overlay (`harness activity`) |
 | `Ctrl-B d` | detach (all windows keep running in the background) |
 
 Inside the right-pane TUI: `j/k` navigate tasks, `Enter` pin to detail, `r` retry, `R` force-retry (for orphans), `c` cancel, `?` help, `q` quit. See [interfaces.md §1.2.1](interfaces.md#121-harness-watch--interactive-tui) for the full keymap.
@@ -205,6 +206,7 @@ harness setup                      # one-time environment check + create global 
 harness doctor                     # check each backend CLI (burns a small amount of API)
 harness status                     # view current status of all tasks
 harness watch                      # interactive TUI: tasks + worker detail + coordinator activity
+harness activity                   # scrollable view of the coordinator's full action history
 harness attach <wid>               # view a snapshot of what a worker is currently doing
 harness events pending             # view pending notification events
 harness backup                     # backup SQLite database
