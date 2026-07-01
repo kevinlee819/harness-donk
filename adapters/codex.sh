@@ -373,27 +373,13 @@ non_cached_in=$((read_in - read_cached))
 [[ $non_cached_in -lt 0 ]] && non_cached_in=0
 
 # 调 harness.usage 折算 USD。模型未知或 token 全 0 时输出 'null' —— 保留 null 别填假数。
-# Codex CLI never reports USD, so we must self-compute from tokens + a price
-# table entry (schema/model-prices.json). If the caller didn't pass --model,
-# fall back to `gpt-5-codex` — codex.ai's own default for `codex exec`, and the
-# entry we track prices for. Without this fallback ADAPTER_MODEL was empty,
-# cost stayed `null`, and `today_cost` looked like $0.00 forever.
-_model_for_pricing="$ADAPTER_MODEL"
-if [[ -z "$_model_for_pricing" ]]; then
-  _model_for_pricing="gpt-5-codex"
-  # Note it in adapter stderr so it's discoverable when someone asks "why is
-  # the cost showing gpt-5-codex prices when I ran a different model"
-  printf '[codex adapter] ADAPTER_MODEL empty — billing at gpt-5-codex prices\n' \
-    >> "$ADAPTER_WORKTREE/.adapter.stderr"
-fi
-
 cost_usd_str="null"
-if [[ $((non_cached_in + read_cached + read_out)) -gt 0 ]]; then
+if [[ -n "$ADAPTER_MODEL" && $((non_cached_in + read_cached + read_out)) -gt 0 ]]; then
   _ph="$HARNESS_HOME/lib/python_env.sh"
   if [[ -f "$_ph" ]]; then
     # shellcheck source=/dev/null
     source "$_ph"
-    cost_usd_str=$("$HARNESS_PYTHON" -m harness.usage codex "$_model_for_pricing" \
+    cost_usd_str=$("$HARNESS_PYTHON" -m harness.usage codex "$ADAPTER_MODEL" \
       "input=$non_cached_in" "output=$read_out" "cache_read=$read_cached" 2>/dev/null || echo null)
   fi
 fi

@@ -325,12 +325,8 @@ test_cost_usd_computed_from_turn_completed_usage() {
     || _assert_fail "cost_usd=$cost expected ~0.125625"
 }
 
-test_cost_usd_falls_back_to_gpt5_codex_when_model_not_set() {
-  # No ADAPTER_MODEL → codex.sh bills at gpt-5-codex prices (matches codex.ai's
-  # own default for `codex exec` and is the model we track a price for). This
-  # keeps `today_cost` truthful when the user runs `harness-infi --backend
-  # codex` without --model. Previously cost_usd stayed null, so weeks of runs
-  # summed to $0.00. Regression test for the real-world "codex 计费一直是 0" issue.
+test_cost_usd_null_when_model_not_set() {
+  # 没传 ADAPTER_MODEL，无法查价目表 → cost_usd 保持 null（绝不填假数）
   local wt; wt=$(_setup_worktree)
   local prompt="$wt/.prompt.txt"; echo "x" > "$prompt"
   local wd="$wt/.harness/workers/w1"; mkdir -p "$wd"
@@ -342,15 +338,7 @@ test_cost_usd_falls_back_to_gpt5_codex_when_model_not_set() {
     ADAPTER_TASK_FILE="$prompt" ADAPTER_WORKTREE="$wt" \
     ADAPTER_WORKER_DIR="$wd" ADAPTER_TASK_ID=T-cost2 ADAPTER_WORKER_ID=w1 \
     bash "$HARNESS_HOME/adapters/codex.sh")
-  # Same token totals as the explicit-model test → same expected cost
-  local cost; cost=$(printf '%s' "$resp" | jq -r '.cost_usd')
-  if [[ "$cost" == "null" ]]; then
-    _assert_fail "cost_usd should fall back to gpt-5-codex prices (got null: $resp)"
-  fi
-  awk -v c="$cost" -v e="0.125625" 'BEGIN{ d=c-e; if(d<0) d=-d; exit (d<1e-5)?0:1 }' \
-    || _assert_fail "cost_usd=$cost expected ~0.125625 (gpt-5-codex fallback)"
-  # And a note in stderr so it's discoverable
-  assert_contains "ADAPTER_MODEL empty" "$(cat "$wt/.adapter.stderr" 2>/dev/null)"
+  assert_json_field "$resp" '.cost_usd' 'null'
 }
 
 test_cost_usd_null_when_model_unknown() {
