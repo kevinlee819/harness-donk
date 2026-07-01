@@ -223,6 +223,14 @@ harness watch                      # interactive TUI: tasks + worker detail + co
 harness activity                   # scrollable view of the coordinator's full action history
 harness attach <wid>               # view a snapshot of what a worker is currently doing
 harness reset [--hard]             # restore project to pre-init state (--dry-run to preview)
+
+# Cost tracking notes:
+# - Claude in API-key mode: total_cost_usd comes from Anthropic, exact.
+# - Claude in OAuth/subscription mode: cost is null unless --model is set
+#   (then shadow-computed from schema/model-prices.json).
+# - Codex CLI never reports USD. If --model is unset, harness bills at
+#   `gpt-5-codex` prices (codex's own default). Pass --model to bill against
+#   a different entry (see `schema/model-prices.json` for known models).
 harness events pending             # view pending notification events
 harness backup                     # backup SQLite database
 harness run-once [--mock]          # run one orchestrator cycle then exit (for manual debugging)
