@@ -19,7 +19,7 @@
 | 2 | DB wrapper | `lib/db.sh` | `db_init / db_claim / db_transition / db_log_call` five functions + unit tests |
 | 3 | File writes | `lib/atomic_write.sh` | `atomic_write_json` function; crash test passes |
 | 4 | Logging | `lib/log.sh` | Call JSON written to `logs/raw/` |
-| 5 | Claude adapter | `adapters/claude.sh` | Input prompt file → output unified structure `{ok, session_id, result, cost_usd, num_turns, error}` |
+| 5 | Claude adapter | `adapters/claude.sh` | Input prompt file → output unified structure `{ok, session_id, result, num_turns, error}` |
 | 6 | Validation gate | `lib/gate.sh` | Five steps in sequence; any failure outputs `.gate-report.json` |
 | 7 | Hooks (minimal security gate) | `hooks/pre_tool_use.sh`, `hooks/stop.sh` | Intercepts `push --force`, `rm -rf` outside worktree, stop without passing gate |
 | 8 | Orchestrator | `orchestrator.sh` | Single worker serial loop: claim → worktree → adapter → gate → merge → reap |
@@ -27,7 +27,7 @@
 | 10 | Entry points | `bin/harness-infi`, `bin/harness` | infi starts coordinator session; harness supports setup/doctor/init/status |
 | 11 | Templates | `templates/AGENTS.md.tmpl`, `templates/settings.json.tmpl`, `templates/gitignore-fragment` | Rendered to project by `harness init` |
 
-**Phase 1 deferred**: Codex / OpenCode adapter, cross-model review, parallel workers, dead worker detection, Notification routing, automated budget kill switch (manual calculation suffices).
+**Phase 1 deferred**: Codex / OpenCode adapter, cross-model review, parallel workers, dead worker detection, Notification routing.
 
 ### 1.2 Acceptance
 
@@ -48,8 +48,7 @@
 | 3 | Dead worker detection | Refresh `sessions.last_seen` when ingesting status.json; scanner returns tasks to QUEUED after threshold exceeded (default 10 minutes); `redispatches++` capped at default 2 |
 | 4 | Guidance escalation | Worker writes `guidance.json {blocking: true}` → orchestrator sets BLOCKED → escalated via notify |
 | 5 | Notification routing | `lib/notify.sh` + `hooks/notification.sh` three event types: needs decision / pending acceptance / failure |
-| 6 | Budget gate | `lib/budget.sh`: daily budget SQL accumulation; when exceeded, triggers kill switch + Notification |
-| 7 | Backup | `harness backup` calls `sqlite3 .backup`, hooked at merge points |
+| 6 | Backup | `harness backup` calls `sqlite3 .backup`, hooked at merge points |
 
 ### 2.2 Acceptance
 

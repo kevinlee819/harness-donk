@@ -21,7 +21,7 @@
 #                         不实际调 claude。用于测试 flag 装配是否正确。
 #
 # 出参（stdout 单行 JSON）—— 与 codex.sh 同 schema：
-#   {ok, session_id, result, cost_usd, num_turns, files_changed, error}
+#   {ok, session_id, result, num_turns, files_changed, error}
 
 set -euo pipefail
 
@@ -31,7 +31,6 @@ ADAPTER_NAME="claude"
 ADAPTER_CAP_SESSION_RESUME=1
 ADAPTER_CAP_SESSION_ID_PROGRAMMATIC=1
 ADAPTER_CAP_TOOL_PERMISSION=1
-ADAPTER_CAP_COST_REPORT=1
 ADAPTER_PARALLEL_PER_WORKTREE=1
 
 : "${ADAPTER_TASK_FILE:?ADAPTER_TASK_FILE required}"
@@ -115,7 +114,7 @@ if [[ -n "${HARNESS_MOCK_ADAPTER:-}" ]]; then
       > "$ADAPTER_WORKER_DIR/guidance.json.tmp" \
       && mv "$ADAPTER_WORKER_DIR/guidance.json.tmp" "$ADAPTER_WORKER_DIR/guidance.json"
     jq -nc --arg sid "$fake_sid" \
-      '{ok:true, session_id:$sid, result:"mock blocked", cost_usd:0, num_turns:1, files_changed:0, error:null}'
+      '{ok:true, session_id:$sid, result:"mock blocked", num_turns:1, files_changed:0, error:null}'
     exit 0
   fi
 
@@ -124,7 +123,7 @@ if [[ -n "${HARNESS_MOCK_ADAPTER:-}" ]]; then
     review_result="${HARNESS_MOCK_REVIEW_RESULT:-}"
     [[ -z "$review_result" ]] && review_result='{"approve":true,"issues":[]}'
     jq -nc --arg sid "$fake_sid" --arg r "$review_result" \
-      '{ok:true, session_id:$sid, result:$r, cost_usd:0, num_turns:1, files_changed:0, error:null}'
+      '{ok:true, session_id:$sid, result:$r, num_turns:1, files_changed:0, error:null}'
     exit 0
   fi
 
@@ -138,7 +137,7 @@ if [[ -n "${HARNESS_MOCK_ADAPTER:-}" ]]; then
   git -c user.email=mock@harness -c user.name=mock commit -m "mock: $(echo "$prompt" | head -c 50)" >/dev/null 2>&1 || true
   changed=$(_count_files_changed)
   jq -nc --arg sid "$fake_sid" --argjson fc "${changed:-0}" \
-    '{ok:true, session_id:$sid, result:"mock done", cost_usd:0, num_turns:1, files_changed:$fc, error:null}'
+    '{ok:true, session_id:$sid, result:"mock done", num_turns:1, files_changed:$fc, error:null}'
   exit 0
 fi
 
@@ -214,37 +213,17 @@ if [[ "$IS_ERR" == "true" || $EXIT -ne 0 ]]; then
   err=$(printf '%s' "$RESP" | jq -r '.error // .raw // "exit_'"$EXIT"'"' | head -c 500)
   sid=$(printf '%s' "$RESP" | jq -r '.session_id // ""')
   jq -nc --arg sid "$sid" --arg err "$err" \
-    '{ok:false, session_id:(if $sid=="" then null else $sid end), result:"", cost_usd:null, num_turns:null, files_changed:0, error:$err}'
+    '{ok:false, session_id:(if $sid=="" then null else $sid end), result:"", num_turns:null, files_changed:0, error:$err}'
   exit 0
 fi
 
 sid=$(printf '%s' "$RESP" | jq -r '.session_id // ""')
 result=$(printf '%s' "$RESP" | jq -r '.result // ""')
-cost=$(printf '%s' "$RESP" | jq -r '.total_cost_usd // .cost_usd // null')
 turns=$(printf '%s' "$RESP" | jq -r '.num_turns // null')
-
-# Shadow USD：CLI 没报（订阅/OAuth max 模式 total_cost_usd 字段缺失）时，按
-# token × schema/model-prices.json 自算。HARNESS_SHADOW_USD=1 强制走自算路径
-# （即便 CLI 报了 0），用于「订阅模式想看等价 API 成本」的场景。
-if [[ "$cost" == "null" || -n "${HARNESS_SHADOW_USD:-}" ]]; then
-  u_in=$(printf '%s' "$RESP" | jq -r '.usage.input_tokens // 0' 2>/dev/null || echo 0)
-  u_out=$(printf '%s' "$RESP" | jq -r '.usage.output_tokens // 0' 2>/dev/null || echo 0)
-  u_cread=$(printf '%s' "$RESP" | jq -r '.usage.cache_read_input_tokens // 0' 2>/dev/null || echo 0)
-  u_cwrite=$(printf '%s' "$RESP" | jq -r '.usage.cache_creation_input_tokens // 0' 2>/dev/null || echo 0)
-  if [[ -n "$ADAPTER_MODEL" && $((u_in + u_out + u_cread + u_cwrite)) -gt 0 ]]; then
-    _ph="$HARNESS_HOME/lib/python_env.sh"
-    if [[ -f "$_ph" ]]; then
-      # shellcheck source=/dev/null
-      source "$_ph"
-      cost=$("$HARNESS_PYTHON" -m harness.usage claude "$ADAPTER_MODEL" \
-        "input=$u_in" "output=$u_out" "cache_read=$u_cread" "cache_write=$u_cwrite" 2>/dev/null || echo null)
-    fi
-  fi
-fi
 
 changed=$(_count_files_changed)
 
-jq -nc --arg sid "$sid" --arg result "$result" --argjson cost "${cost:-null}" \
+jq -nc --arg sid "$sid" --arg result "$result" \
        --argjson turns "${turns:-null}" --argjson fc "${changed:-0}" \
        --argjson dur "$duration" \
-  '{ok:true, session_id:$sid, result:$result, cost_usd:$cost, num_turns:$turns, files_changed:$fc, duration_ms:$dur, error:null}'
+  '{ok:true, session_id:$sid, result:$result, num_turns:$turns, files_changed:$fc, duration_ms:$dur, error:null}'

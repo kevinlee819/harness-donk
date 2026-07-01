@@ -27,7 +27,6 @@
 │   ├── adapter.py                      # subprocess 封装：调 adapters/<backend>.sh
 │   ├── notify.py                       # events 表 + JSON 文件 + hooks/notification.sh（端口自 lib/notify.sh）
 │   ├── watchdog.py                     # 定时巡检——检测 orchestrator-down / 持续 stuck / 久未消费事件
-│   ├── budget.py                       # 预算闸（端口自 lib/budget.sh）
 │   ├── atomic_write.py                 # JSON / text 原子写（端口自 lib/atomic_write.sh）
 │   ├── config.py                       # 读 ~/.config/harness/config
 │   └── cli/
@@ -72,7 +71,7 @@
     ├── unit/                           # 全部 mock，CI 跑
     │   ├── test_atomic_write.sh / test_gate.sh / test_hooks.sh
     │   ├── test_notify.sh / test_notification_hook.sh
-    │   ├── test_budget.sh / test_backup.sh / test_events_cli.sh
+    │   ├── test_backup.sh / test_events_cli.sh
     │   ├── test_claude_adapter.sh / test_codex_adapter.sh
     │   ├── test_gate_cross_review.sh
     │   ├── test_db.py                  # 30+ cases 含 migration drill
@@ -107,7 +106,6 @@
 | M7 | 校验门 | `lib/gate.sh` | 多步骤检查 → `.gate-report.json` | gate 进程 |
 | M8 | 安全 hooks | `hooks/` | 项目 `.claude/settings.json` 注册，确定性拦截 | hook 进程 |
 | M9 | 通知路由 | `src/harness/notify.py` + `hooks/notification.sh` | events 表 + JSON 文件 + 桌面通知（pull-on-re-engagement，见 coordinator.md §2.2） | notify 进程 |
-| M10 | 成本闸 | `src/harness/budget.py` + orchestrator `_budget_guard` | 累计 + 超限 kill switch + budget_exceeded 事件 | 编排器调用 |
 | M11 | 项目初始化 | `bin/harness init` + `templates/` | bootstrap 新项目；`--backend` 反转默认 reviewer | 初始化脚本 |
 | M12 | 调用日志 | adapter 内 `_log_raw` | 调用 JSON 落 `logs/raw/`（含 envelope）| adapter 进程 |
 | M13 | 孤儿回收 | orchestrator `_reap_orphans` + `_timeout_blocked` | 单进程下崩溃残留任务自愈 + BLOCKED 超时回收 | 编排器调用 |
@@ -131,7 +129,7 @@
                 ▼                 ▼                 ▼
         ┌──────────────────────────────────────────────┐
         │  M5 db.sh  │ M6 atomic_write │ M9 notify    │
-        │  M7 gate   │ M10 budget      │ M12 log      │
+        │  M7 gate   │ M12 log         │              │
         └────────┬───────────────────────────┬─────────┘
                  │                           │
                  ▼                           ▼
@@ -153,7 +151,7 @@
 **规则**：
 
 - 上层只调下层，不反向。
-- `lib/` 之间相互独立，不互调（除非显式声明）。例外：`budget.sh` 与 `notify.sh` 都需调 `db.sh`。
+- `lib/` 之间相互独立，不互调（除非显式声明）。例外：`notify.sh` 需调 `db.sh`。
 - `adapters/` 不依赖 db / notify — 它们是纯函数式包装，输入提示词、输出统一结构。
 - `hooks/` 是部署到外部项目的脚本，**禁止依赖 harness 仓库的 lib**（项目里没有），所有需要的工具函数 inline。
 

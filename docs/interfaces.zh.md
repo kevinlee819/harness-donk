@@ -45,7 +45,7 @@ harness init [--backend claude|codex]    # 当前目录 bootstrap：建 .harness
                                          # --backend 决定 AGENTS.md 默认 cross_review_reviewer
                                          # （writer-reviewer 自动反转：claude→codex / codex→claude）
 harness status [--task <id>] [--history] # 任务列表 / 单任务详情 / 迁移史
-harness events pending                   # 列出待处理事件（needs_decision / failed / completed / budget_exceeded）
+harness events pending                   # 列出待处理事件（needs_decision / failed / completed / task_blocked）
 harness events ack <eid>...              # 标记事件已交付（防止协调者重复报告）
 harness orphans [minutes]                # 列出孤儿任务（working/dispatched/gating 超过 N 分钟未更新，默 5）
 harness watchdog-tick                    # 手动跑一次 watchdog 巡检（详见 §8.2）
@@ -77,7 +77,7 @@ curses 实现的仪表盘。终端内三个区：
    (`turns / files_changed / progress / 距上次更新`) + `transitions` 表最近 5 行。
    只读 —— 真正的状态变迁仍由任务面板的按键经 DB 完成。
 3. **状态栏**（底部 2 行）：左侧显示协调者最近一条 `log-action` 记录，
-   右侧显示计数（`●N ○N ✓N ✗N`）+ 今日成本。
+   右侧显示计数（`●N ○N ✓N ✗N`）。
 
 | 键 | 作用 |
 |----|------|
@@ -167,7 +167,6 @@ orchestrator.sh [--project <path>] [--once] [--mock] [--max-retries N] \
 
 ```
 loop:
-  budget_check || { kill_switch; sleep 30; continue }
   task = db_claim()              # 原子取 queued 队首
   if !task: sleep 5; continue
   worktree = worktree_create(task)
@@ -224,7 +223,6 @@ bash adapters/claude.sh
   "ok": true,
   "session_id": "uuid-...",
   "result": "natural language summary",     # 仅供人/排障，禁止做控制决策
-  "cost_usd": 0.42,
   "num_turns": 7,
   "files_changed": 5,
   "error": null                              # ok=false 时填错误简述
@@ -261,11 +259,10 @@ bash 入口通过 `harness-db <subcommand>` console script 调用（见 `src/har
 db.init(schema_sql_path)                        # 跑 schema/harness.sql + 增量 migrations，幂等
 db.claim(worker_id)                             # 原子 UPDATE...RETURNING → (task_id, spec_path) 或 None
 db.transition(task_id, to_state, reason="")    # 写 tasks.status + transitions（BEGIN IMMEDIATE）
-db.log_call(task_id, worker_id, backend, sid, exit_code, cost, turns, duration_ms, files_changed)
+db.log_call(task_id, worker_id, backend, sid, exit_code, turns, duration_ms, files_changed)
 db.register_session(task_id, backend, session_id)
 db.session_touch(task_id, backend)              # 刷新 last_seen=now
 db.query_orphans(threshold_min, exclude_ids=[]) # 列出崩溃残留 transient 状态任务
-db.today_cost()                                 # 今日累计 USD（float）
 db.query_status(task_id=None)                   # 任务列表
 db.event_write / event_query_pending / event_mark_delivered
 ```
@@ -367,7 +364,7 @@ gate:
 ### 7.3 `hooks/notification.sh` 契约
 
 - 输入：`hooks/notification.sh <event_type> <task_id> <event_json_path>`（由 `harness.notify.notify` fire-and-forget 调用）。
-- 行为：macOS 桌面通知（osascript） + 写 `.harness/logs/notify.log`。四种事件类型（`needs_decision` / `task_completed` / `task_failed` / `budget_exceeded`）都会发桌面通知——`task_completed` 也要发，是因为协调者会话不能自己唤醒，桌面 toast 是把用户拉回对话的唯一信号（用户回来发消息时协调者再 pull events）。`needs_decision` 弹交互式对话框，答案写入 `inbox/<tid>.answer`；其他是不阻塞的 toast。
+- 行为：macOS 桌面通知（osascript） + 写 `.harness/logs/notify.log`。四种事件类型（`needs_decision` / `task_completed` / `task_failed` / `task_blocked`）都会发桌面通知——`task_completed` 也要发，是因为协调者会话不能自己唤醒，桌面 toast 是把用户拉回对话的唯一信号（用户回来发消息时协调者再 pull events）。`needs_decision` 弹交互式对话框，答案写入 `inbox/<tid>.answer`；其他是不阻塞的 toast。
 
 ---
 
@@ -378,7 +375,7 @@ gate:
 ```python
 from harness.notify import notify
 notify(event_type: str, task_id: Optional[str], payload: dict) -> int
-# event_type: needs_decision | task_completed | task_failed | budget_exceeded
+# event_type: needs_decision | task_completed | task_failed | task_blocked
 ```
 
 - 写入 `events` 表 + `.harness/events/<ts>-<event_type>-<task_id>.json`。
@@ -408,25 +405,9 @@ harness watchdog-tick            # 手动跑一轮（排障 / 验证用）
 
 ---
 
-## 9. 成本闸（M10）
+## 9. 项目初始化（M11）
 
-### 9.1 `src/harness/budget.py`
-
-```python
-from harness.budget import under_limit, today_cost, daily_limit
-under_limit() -> bool           # True = 仍可派
-today_cost() -> float           # 今日累计 USD
-daily_limit() -> float          # 从 ~/.config/harness/config 读，默 10
-```
-
-- 日预算从 `~/.config/harness/config` 读取，超限 `notify budget_exceeded`。
-- 不杀已运行 worker（防止丢工作）；只停 `db_claim` 新任务。
-
----
-
-## 10. 项目初始化（M11）
-
-### 10.1 `bin/harness init` 步骤
+### 9.1 `bin/harness init` 步骤
 
 按序：
 
@@ -443,7 +424,7 @@ daily_limit() -> float          # 从 ~/.config/harness/config 读，默 10
 
 ---
 
-## 11. 跨模块触发关系图
+## 10. 跨模块触发关系图
 
 ```
 人/协调者                           worker                       编排器

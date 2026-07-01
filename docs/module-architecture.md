@@ -27,7 +27,6 @@
 │   ├── adapter.py                      # subprocess wrapper: calls adapters/<backend>.sh
 │   ├── notify.py                       # events table + JSON files + hooks/notification.sh (ported from lib/notify.sh)
 │   ├── watchdog.py                     # periodic supervisor — detects orchestrator-down / persistent stuck / unread events
-│   ├── budget.py                       # budget gate (ported from lib/budget.sh)
 │   ├── atomic_write.py                 # JSON / text atomic write (ported from lib/atomic_write.sh)
 │   ├── config.py                       # reads ~/.config/harness/config
 │   └── cli/
@@ -72,7 +71,7 @@
     ├── unit/                           # all mocked, runs in CI
     │   ├── test_atomic_write.sh / test_gate.sh / test_hooks.sh
     │   ├── test_notify.sh / test_notification_hook.sh
-    │   ├── test_budget.sh / test_backup.sh / test_events_cli.sh
+    │   ├── test_backup.sh / test_events_cli.sh
     │   ├── test_claude_adapter.sh / test_codex_adapter.sh
     │   ├── test_gate_cross_review.sh
     │   ├── test_db.py                  # 30+ cases including migration drill
@@ -107,7 +106,6 @@
 | M7 | Validation gate | `lib/gate.sh` | Multi-step checks → `.gate-report.json` | Gate process |
 | M8 | Security hooks | `hooks/` | Registered in project `.claude/settings.json`; deterministic interception | Hook process |
 | M9 | Notification routing | `src/harness/notify.py` + `hooks/notification.sh` | events table + JSON files + desktop notification (pull-on-re-engagement, see coordinator.md §2.2) | Notify process |
-| M10 | Cost gate | `src/harness/budget.py` + orchestrator `_budget_guard` | Accumulation + over-limit kill switch + budget_exceeded event | Orchestrator call |
 | M11 | Project initialization | `bin/harness init` + `templates/` | Bootstrap new project; `--backend` flips default reviewer | Initialization script |
 | M12 | Call logging | adapter internal `_log_raw` | Call JSON written to `logs/raw/` (including envelope) | Adapter process |
 | M13 | Orphan recovery | orchestrator `_reap_orphans` + `_timeout_blocked` | Single-process crash residue self-healing + BLOCKED timeout recovery | Orchestrator call |
@@ -131,7 +129,7 @@
                 ▼                 ▼                 ▼
         ┌──────────────────────────────────────────────┐
         │  M5 db.sh  │ M6 atomic_write │ M9 notify    │
-        │  M7 gate   │ M10 budget      │ M12 log      │
+        │  M7 gate   │ M12 log         │              │
         └────────┬───────────────────────────┬─────────┘
                  │                           │
                  ▼                           ▼
@@ -153,7 +151,7 @@
 **Rules**:
 
 - Upper layers only call lower layers, never the reverse.
-- `lib/` modules are independent of each other; no cross-calls (unless explicitly declared). Exception: `budget.sh` and `notify.sh` both need to call `db.sh`.
+- `lib/` modules are independent of each other; no cross-calls (unless explicitly declared). Exception: `notify.sh` needs to call `db.sh`.
 - `adapters/` don't depend on db / notify — they are purely functional wrappers: input prompts, output unified structure.
 - `hooks/` are scripts deployed to external projects; **must not depend on harness repo's `lib`** (not available in the project); all needed utilities are inlined.
 

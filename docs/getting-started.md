@@ -366,7 +366,6 @@ Does two things:
 
 ```ini
 # ~/.config/harness/config
-budget_daily_usd=10          # daily budget USD; new dispatches stop when exceeded
 session_resume_cap=6         # same-session resume cap; opens new session at limit to prevent context drift
 dead_worker_threshold_min=10 # transient state timeout treated as dead worker, automatically redispatched
 blocked_timeout_hours=72     # BLOCKED task past this time → marked FAILED
@@ -590,11 +589,10 @@ harness events ack <eid>...
 `harness init` writes a `statusLine` configuration to the project's `.claude/settings.json`, making the Claude Code coordinator session's **bottom status bar** refresh every 5 seconds:
 
 ```
-🫏 W:2 Q:1 B:0 F:0 M:7 · $1.24/$10 · w2/4 · Opus 4.7
-   │   │   │   │   │      │           │       │
-   │   │   │   │   │      │           │       └─ current model
-   │   │   │   │   │      │           └─ worker pool busy/total
-   │   │   │   │   │      └─ today's cost / daily budget (>50% yellow, >90% red)
+🫏 W:2 Q:1 B:0 F:0 M:7 · w2/4 · Opus 4.7
+   │   │   │   │   │      │       │
+   │   │   │   │   │      │       └─ current model
+   │   │   │   │   │      └─ worker pool busy/total
    │   │   │   │   └─ merged today
    │   │   │   └─ failed
    │   │   └─ blocked (red, alerts when present)
@@ -661,13 +659,12 @@ harness-task answer  <task_id> <text>   # reply to a BLOCKED task
 `~/.config/harness/config`:
 
 ```ini
-budget_daily_usd=10           # daily budget USD; accumulated excess stops new task dispatching
 session_resume_cap=6          # same-session resume cap; forces new session at limit
 dead_worker_threshold_min=10  # transient state + updated older than this → considered dead, redispatched
 blocked_timeout_hours=72      # BLOCKED past this duration → FAILED + coordinator notified
 ```
 
-`~/.config/harness/projects.list`: One project absolute path per line, auto-appended by `harness init` (idempotent). Used for future cross-project budget aggregation.
+`~/.config/harness/projects.list`: One project absolute path per line, auto-appended by `harness init` (idempotent).
 
 ### Project-Level (One Per Project, in git)
 
@@ -756,11 +753,7 @@ reviewer: claude     # force claude as judge, even if global config is codex
 
 ### Q: Where do I see money spent
 
-```bash
-sqlite3 .harness/harness.db "SELECT date(ts), SUM(cost_usd) FROM calls GROUP BY date(ts) ORDER BY 1 DESC LIMIT 7"
-```
-
-Or run the daily budget check: `harness status` shows today's cumulative total at the top. Note that codex's `cost_usd` is currently NULL (the CLI doesn't expose a USD field, only token usage).
+**harness does not track cost.** OAuth/subscription users pay a flat monthly fee (the per-request number is a distraction), codex CLI doesn't expose USD at all, and any half-baked shadow computation misled more than it helped — so we removed the whole surface. To watch spend, use your provider's own console (Anthropic Console / OpenAI usage dashboard).
 
 ### Q: Notification icon is a grey plug, not a donkey
 

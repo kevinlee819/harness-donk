@@ -136,21 +136,20 @@ class DbTestCase(unittest.TestCase):
         self.assertEqual("sid-x", db.get_session("T-RM", "codex"))
         self.assertIsNone(db.get_session("T-RM", "claude"))
 
-    # ── calls / cost ──
-    def test_log_call_and_today_cost(self):
+    # ── calls ──
+    def test_log_call_writes_row(self):
         db.add_task("T-C", "s.md")
-        db.log_call("T-C", "w1", "claude", "sid-1", 0, 0.5, 3, 1200, 2)
-        db.log_call("T-C", "w1", "claude", "sid-2", 0, 0.7, 4, 1500, 1)
-        self.assertAlmostEqual(1.2, db.today_cost(), places=4)
+        db.log_call("T-C", "w1", "claude", "sid-1", 0, 3, 1200, 2)
+        db.log_call("T-C", "w1", "claude", "sid-2", 0, 4, 1500, 1)
+        import sqlite3
+        with sqlite3.connect(str(self.db_path)) as c:
+            (n,) = c.execute("SELECT COUNT(*) FROM calls WHERE task_id=?",
+                             ("T-C",)).fetchone()
+        self.assertEqual(2, n)
 
-    def test_today_cost_empty(self):
-        # Regression for bash args[@] unbound bug — now N/A in Python but kept
-        self.assertEqual(0.0, db.today_cost())
-
-    def test_log_call_with_null_cost(self):
+    def test_log_call_with_null_optional_fields(self):
         db.add_task("T-N", "s.md")
-        db.log_call("T-N", "w1", "claude", None, 0, None, None, None, 0)
-        self.assertEqual(0.0, db.today_cost())
+        db.log_call("T-N", "w1", "claude", None, 0, None, None, 0)
 
     # ── ids ──
     def test_gen_task_id_format(self):
@@ -174,13 +173,13 @@ class DbTestCase(unittest.TestCase):
         db.add_task("T-EV", "a.md")
         eid1 = db.event_write("task_completed", "T-EV", {"branch": "harness/T-EV"})
         eid2 = db.event_write("needs_decision", "T-EV", {"q": "?"})
-        eid3 = db.event_write("budget_exceeded", None, {"used": 11.0, "limit": 10})
+        eid3 = db.event_write("task_blocked", None, {"reason": "downstream_blocked"})
         self.assertEqual([1, 2, 3], [eid1, eid2, eid3])
 
         pending = db.event_query_pending()
         self.assertEqual(3, len(pending))
         types = [r[2] for r in pending]
-        self.assertEqual(["task_completed", "needs_decision", "budget_exceeded"], types)
+        self.assertEqual(["task_completed", "needs_decision", "task_blocked"], types)
 
         db.event_mark_delivered(eid1)
         pending2 = db.event_query_pending()

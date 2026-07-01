@@ -20,7 +20,7 @@
 #                         不实际调 codex。用于测试 flag 装配是否正确。
 #
 # 出参（stdout 单行 JSON）—— 与 claude.sh 同 schema：
-#   {ok, session_id, result, cost_usd, num_turns, files_changed, duration_ms, error}
+#   {ok, session_id, result, num_turns, files_changed, duration_ms, error}
 #
 # 串行约束（CLAUDE.md §4.6）：同一 worktree 同时最多一个 codex 进程。
 # 用 mkdir 原子互斥（macOS 无 flock）。
@@ -34,7 +34,6 @@ ADAPTER_NAME="codex"
 ADAPTER_CAP_SESSION_RESUME=1                   # codex exec resume <uuid|--last>
 ADAPTER_CAP_SESSION_ID_PROGRAMMATIC=1          # thread_id 从 thread.started 事件可取（codex 0.142+）
 ADAPTER_CAP_TOOL_PERMISSION=1                  # --sandbox + --ask-for-approval
-ADAPTER_CAP_COST_REPORT=1                      # USD 自算：token × schema/model-prices.json（详见 src/harness/usage.py）
 ADAPTER_PARALLEL_PER_WORKTREE=0                # 必须串行（避开 git index 竞争）
 
 : "${ADAPTER_TASK_FILE:?ADAPTER_TASK_FILE required}"
@@ -137,7 +136,7 @@ if [[ -n "${HARNESS_MOCK_ADAPTER:-}" ]]; then
       > "$ADAPTER_WORKER_DIR/guidance.json.tmp" \
       && mv "$ADAPTER_WORKER_DIR/guidance.json.tmp" "$ADAPTER_WORKER_DIR/guidance.json"
     jq -nc --arg sid "$fake_sid" \
-      '{ok:true, session_id:$sid, result:"mock blocked", cost_usd:null, num_turns:1, files_changed:0, error:null}'
+      '{ok:true, session_id:$sid, result:"mock blocked", num_turns:1, files_changed:0, error:null}'
     exit 0
   fi
 
@@ -146,7 +145,7 @@ if [[ -n "${HARNESS_MOCK_ADAPTER:-}" ]]; then
     review_result="${HARNESS_MOCK_REVIEW_RESULT:-}"
     [[ -z "$review_result" ]] && review_result='{"approve":true,"issues":[]}'
     jq -nc --arg sid "$fake_sid" --arg r "$review_result" \
-      '{ok:true, session_id:$sid, result:$r, cost_usd:null, num_turns:1, files_changed:0, error:null}'
+      '{ok:true, session_id:$sid, result:$r, num_turns:1, files_changed:0, error:null}'
     exit 0
   fi
 
@@ -160,7 +159,7 @@ if [[ -n "${HARNESS_MOCK_ADAPTER:-}" ]]; then
       commit -m "mock-codex: ${ADAPTER_TASK_ID:-?}: $(echo "$prompt" | head -c 50)" >/dev/null 2>&1 || true
   changed=$(_count_files_changed)
   jq -nc --arg sid "$fake_sid" --argjson fc "${changed:-0}" \
-    '{ok:true, session_id:$sid, result:"mock-codex done", cost_usd:null, num_turns:1, files_changed:$fc, error:null}'
+    '{ok:true, session_id:$sid, result:"mock-codex done", num_turns:1, files_changed:$fc, error:null}'
   exit 0
 fi
 
@@ -361,29 +360,6 @@ turns=$(grep -c '"type":"turn.completed"' "$EVENTS" 2>/dev/null || true)
 thread_id=$(jq -r 'select(.type=="thread.started") | .thread_id' "$EVENTS" 2>/dev/null | head -1)
 [[ -z "$thread_id" || "$thread_id" == "null" ]] && thread_id=""
 
-# Token usage：汇总所有 turn.completed.usage（codex JSONL 每轮一条）。
-# 字段（codex 0.142+ / OpenAI Responses 风格）：
-#   input_tokens (含 cached_input_tokens), cached_input_tokens,
-#   output_tokens (含 reasoning_output_tokens), reasoning_output_tokens
-# OpenAI 约定：cached 是 input 的子集 —— 计算时要先减去。
-read_in=$(jq -s '[.[] | select(.type=="turn.completed") | .usage.input_tokens // 0] | add // 0' "$EVENTS" 2>/dev/null || echo 0)
-read_cached=$(jq -s '[.[] | select(.type=="turn.completed") | .usage.cached_input_tokens // 0] | add // 0' "$EVENTS" 2>/dev/null || echo 0)
-read_out=$(jq -s '[.[] | select(.type=="turn.completed") | .usage.output_tokens // 0] | add // 0' "$EVENTS" 2>/dev/null || echo 0)
-non_cached_in=$((read_in - read_cached))
-[[ $non_cached_in -lt 0 ]] && non_cached_in=0
-
-# 调 harness.usage 折算 USD。模型未知或 token 全 0 时输出 'null' —— 保留 null 别填假数。
-cost_usd_str="null"
-if [[ -n "$ADAPTER_MODEL" && $((non_cached_in + read_cached + read_out)) -gt 0 ]]; then
-  _ph="$HARNESS_HOME/lib/python_env.sh"
-  if [[ -f "$_ph" ]]; then
-    # shellcheck source=/dev/null
-    source "$_ph"
-    cost_usd_str=$("$HARNESS_PYTHON" -m harness.usage codex "$ADAPTER_MODEL" \
-      "input=$non_cached_in" "output=$read_out" "cache_read=$read_cached" 2>/dev/null || echo null)
-  fi
-fi
-
 # 取最后一条 agent_message 文本
 final_text=$(jq -r 'select(.type=="item.completed" and .item.type=="agent_message") | .item.text' \
              "$EVENTS" 2>/dev/null | tail -1)
@@ -407,13 +383,12 @@ if [[ $EXIT -ne 0 ]]; then
   esac
   jq -nc --arg err "$err_msg" --arg sid "$thread_id" --argjson dur "$duration" \
     '{ok:false, session_id:(if $sid=="" then null else $sid end), result:"",
-      cost_usd:null, num_turns:null, files_changed:0, duration_ms:$dur, error:$err}'
+      num_turns:null, files_changed:0, duration_ms:$dur, error:$err}'
   exit 0
 fi
 
 changed=$(_count_files_changed)
 jq -nc --arg sid "$thread_id" --arg r "$final_text" --argjson turns "${turns:-0}" \
        --argjson fc "${changed:-0}" --argjson dur "$duration" \
-       --argjson cost "${cost_usd_str:-null}" \
   '{ok:true, session_id:(if $sid=="" then null else $sid end), result:$r,
-    cost_usd:$cost, num_turns:$turns, files_changed:$fc, duration_ms:$dur, error:null}'
+    num_turns:$turns, files_changed:$fc, duration_ms:$dur, error:null}'

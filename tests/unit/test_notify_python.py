@@ -46,8 +46,9 @@ class NotifyTests(unittest.TestCase):
             notify("bogus_type", "-", {})
 
     def test_dash_task_id_writes_none_filename(self) -> None:
-        notify("budget_exceeded", "-", {"cost_usd": 1, "limit_usd": 0.5, "date": "2026-06-26"})
-        files = list((self.proj / ".harness" / "events").glob("*budget_exceeded-none*.json"))
+        # task_blocked can be project-level ("this failure blocks the queue")
+        notify("task_blocked", "-", {"reason": "downstream_blocked", "blocked_tasks": ["T-1"]})
+        files = list((self.proj / ".harness" / "events").glob("*task_blocked-none*.json"))
         self.assertEqual(len(files), 1)
 
     def test_event_ack_removes_from_pending(self) -> None:

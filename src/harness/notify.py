@@ -24,8 +24,7 @@ from typing import Optional
 from harness import db
 from harness.atomic_write import write_json
 
-ALLOWED = {"needs_decision", "task_completed", "task_failed",
-           "task_blocked", "budget_exceeded"}
+ALLOWED = {"needs_decision", "task_completed", "task_failed", "task_blocked"}
 
 # Debounce: don't inject more than once per N seconds across all threads.
 _last_poke_time: float = 0.0
@@ -123,7 +122,8 @@ def _poke_coordinator_if_idle(proj_dir: Path) -> None:
 def notify(event_type: str, task_id: Optional[str], payload: dict) -> int:
     """Emit an event. Returns the new event id.
 
-    `task_id` of None or "-" means project-level event (e.g. budget_exceeded).
+    `task_id` of None or "-" means project-level event (e.g. task_blocked
+    covering multiple downstream tasks).
     """
     if event_type not in ALLOWED:
         raise ValueError(f"invalid event_type: {event_type}")

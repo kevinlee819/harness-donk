@@ -8,14 +8,13 @@ Claude Code calls us every refresh interval, piping a JSON blob to stdin:
       "session_id": "...",
       "cwd": "...",
       "model": {"id": "claude-opus-4-7", "display_name": "Opus 4.7"},
-      "cost": {"total_cost_usd": 0.0123, ...},
       ...
     }
 
 We read it, augment with harness state from .harness/harness.db (task counts,
-today cost from the calls table, busy workers from workers/<id>/status.json),
-and emit one ANSI line to stdout. Goes silent (empty line, exit 0) on any
-error so a broken statusline never crashes the user's coordinator session.
+busy workers from workers/<id>/status.json), and emit one ANSI line to stdout.
+Goes silent (empty line, exit 0) on any error so a broken statusline never
+crashes the user's coordinator session.
 
 Why a separate command (not just `harness status`):
   - `harness status` is human-typed, prints multi-line table
@@ -43,17 +42,6 @@ YELLOW = "\033[33m"
 RED = "\033[31m"
 CYAN = "\033[36m"
 GREY = "\033[90m"
-
-
-def _color_for_budget(used: float, limit: float) -> str:
-    if limit <= 0:
-        return GREY
-    pct = used / limit
-    if pct >= 0.9:
-        return RED
-    if pct >= 0.5:
-        return YELLOW
-    return GREEN
 
 
 # ---- Data gathering --------------------------------------------------------
@@ -133,40 +121,6 @@ def _task_counts(db_path: Path) -> Counter:
     return out
 
 
-def _today_cost_from_db(db_path: Path) -> Optional[float]:
-    """Sum of cost_usd from calls table for today (UTC). None on error."""
-    import sqlite3
-
-    try:
-        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2.0) as c:
-            (v,) = c.execute(
-                "SELECT COALESCE(SUM(cost_usd), 0) FROM calls "
-                "WHERE strftime('%s', ts) >= strftime('%s', 'now', 'start of day')"
-            ).fetchone()
-        return float(v)
-    except Exception:
-        return None
-
-
-def _budget_limit() -> float:
-    """Best-effort read of budget_daily_usd from ~/.config/harness/config."""
-    conf = (
-        Path(os.environ.get("HARNESS_CONFIG_DIR", Path.home() / ".config" / "harness"))
-        / "config"
-    )
-    if not conf.is_file():
-        return 10.0
-    try:
-        for line in conf.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line.startswith("budget_daily_usd"):
-                _, _, v = line.partition("=")
-                return float(v.strip())
-    except Exception:
-        pass
-    return 10.0
-
-
 def _short_model(cc_blob: dict) -> str:
     m = (cc_blob.get("model") or {}).get("display_name") or (
         cc_blob.get("model") or {}
@@ -194,8 +148,6 @@ def render(cc_blob: dict) -> str:
     db = project / ".harness" / "harness.db"
     counts = _task_counts(db)
     busy, total = _count_busy_workers(project)
-    today = _today_cost_from_db(db)
-    limit = _budget_limit()
     model = _short_model(cc_blob)
 
     # Task counts segment: W:n Q:n B:n F:n M:n (today)
@@ -211,11 +163,6 @@ def render(cc_blob: dict) -> str:
         f"{GREEN}M:{m_today}{R}"
     )
     parts.append(task_seg)
-
-    # Budget segment.
-    if today is not None:
-        col = _color_for_budget(today, limit)
-        parts.append(f"{col}${today:.2f}/${limit:.0f}{R}")
 
     # Worker pool segment (only if any worker dir seen).
     if total > 0:

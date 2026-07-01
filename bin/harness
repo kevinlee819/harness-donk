@@ -312,9 +312,6 @@ cmd_status() {
   fi
 
   # 默认：全部任务摘要
-  echo "== Today cost =="
-  printf "  \$%.4f\n" "$(_db today-cost)"
-  echo
   echo "== Tasks =="
   printf "  %-20s %-12s %-8s %-30s %s\n" "ID" "STATUS" "RETRIES" "BRANCH" "CREATED"
   _db query-status | while IFS=$'\t' read -r id stat wid branch retries reds prio created; do
@@ -406,7 +403,6 @@ cmd_setup() {
   if [[ ! -f "$conf_dir/config" ]]; then
     cat > "$conf_dir/config" <<EOF
 # harness 全局配置（首次自动生成）
-budget_daily_usd=10
 session_resume_cap=6
 dead_worker_threshold_min=10
 blocked_timeout_hours=72
@@ -657,16 +653,12 @@ cmd_watch_panel() {
   (( row_cap < 1 ))  && row_cap=1
   (( row_cap > 12 )) && row_cap=12
 
-  # ── header: cost left-aligned, nav hint right-aligned ─────
-  local cost_str="$0.00"
-  [[ -f "$HARNESS_DB" ]] && {
-    local c; c=$(_db today-cost 2>/dev/null) \
-      && cost_str="$(printf '$%.2f' "$c")"
-  }
+  # ── header: project logo left, nav hint right ─────
+  local proj_label; proj_label=$(basename "$(pwd)")
   local nav="[Ctrl-B 0/1/2: chat/logs/watchdog]"
-  local gap=$(( W - ${#cost_str} - ${#nav} - 5 ))   # 5 = "🫏  " visual width
+  local gap=$(( W - ${#proj_label} - ${#nav} - 5 ))   # 5 = "🫏  " visual width
   (( gap < 1 )) && gap=1
-  printf "🫏  %s%*s%s\n" "$cost_str" "$gap" "" "$nav"
+  printf "🫏  %s%*s%s\n" "$proj_label" "$gap" "" "$nav"
   printf "${DIM}%${W}s${R}\n" '' | tr ' ' '─'
 
   # ── body ──────────────────────────────────────────────────
@@ -970,7 +962,7 @@ Commands:
   doctor                  各 backend echo 自检（会真调一次 claude，烧少量 API）
   status [--task T-XXX [--history]]
                           任务列表 / 单任务详情 / 迁移史
-  events pending          列出待处理事件（needs_decision / failed / completed / budget_exceeded）
+  events pending          列出待处理事件（needs_decision / failed / completed / task_blocked）
   events ack <eid>...     标记事件已交付（避免协调者重复报告）
   orphans [minutes]       列出孤儿任务（working/dispatched/gating 超过 N 分钟无更新，默认 5）
   watchdog-tick           手动跑一次 watchdog 巡检（检测 orchestrator_down /

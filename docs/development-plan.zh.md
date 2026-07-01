@@ -19,7 +19,7 @@
 | 2 | DB 封装 | `lib/db.sh` | `db_init / db_claim / db_transition / db_log_call` 五个函数 + 单元测试 |
 | 3 | 文件写入 | `lib/atomic_write.sh` | `atomic_write_json` 函数，崩溃测试通过 |
 | 4 | 日志 | `lib/log.sh` | 调用 JSON 落盘 `logs/raw/` |
-| 5 | Claude adapter | `adapters/claude.sh` | 输入提示词文件 → 输出统一结构 `{ok, session_id, result, cost_usd, num_turns, error}` |
+| 5 | Claude adapter | `adapters/claude.sh` | 输入提示词文件 → 输出统一结构 `{ok, session_id, result, num_turns, error}` |
 | 6 | 校验门 | `lib/gate.sh` | 五步骤按序，任一失败输出 `.gate-report.json` |
 | 7 | hooks（安全门最小集） | `hooks/pre_tool_use.sh`, `hooks/stop.sh` | 拦截 `push --force`、worktree 外 `rm -rf`、未过门 stop |
 | 8 | 编排器 | `orchestrator.sh` | 单 worker 串行循环：claim → worktree → adapter → gate → merge → reap |
@@ -27,7 +27,7 @@
 | 10 | 入口 | `bin/harness-infi`, `bin/harness` | infi 起协调者会话；harness 支持 setup/doctor/init/status |
 | 11 | 模板 | `templates/AGENTS.md.tmpl`, `templates/settings.json.tmpl`, `templates/gitignore-fragment` | `harness init` 渲染到项目 |
 
-**阶段一不做**：Codex / OpenCode adapter、跨模型审查、并行 worker、死 worker 检测、Notification 路由、预算闸自动 kill（手算即可）。
+**阶段一不做**：Codex / OpenCode adapter、跨模型审查、并行 worker、死 worker 检测、Notification 路由。
 
 ### 1.2 验收
 
@@ -48,8 +48,7 @@
 | 3 | 死 worker 检测 | 摄取 status.json 时刷新 `sessions.last_seen`；超阈值（默认 10 分钟）扫描器退回 QUEUED；`redispatches++` 封顶默认 2 |
 | 4 | guidance 升级 | worker 写 `guidance.json {blocking: true}` → 编排器置 BLOCKED → 经 notify 上抛 |
 | 5 | 通知路由 | `lib/notify.sh` + `hooks/notification.sh` 三类事件路由：需决策 / 待验收 / 故障 |
-| 6 | 预算闸 | `lib/budget.sh`：日预算 SQL 累加，超限触发 kill switch + Notification |
-| 7 | 备份 | `harness backup` 调 `sqlite3 .backup`，挂在合并节点 |
+| 6 | 备份 | `harness backup` 调 `sqlite3 .backup`，挂在合并节点 |
 
 ### 2.2 验收
 

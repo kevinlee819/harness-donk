@@ -37,7 +37,6 @@ RESP=$(ADAPTER_TASK_FILE="$SMOKE_DIR/prompt.txt" \
 echo "$RESP" | jq .
 
 ok=$(echo "$RESP" | jq -r '.ok')
-cost=$(echo "$RESP" | jq -r '.cost_usd')
 turns=$(echo "$RESP" | jq -r '.num_turns')
 duration=$(echo "$RESP" | jq -r '.duration_ms')
 
@@ -58,4 +57,4 @@ if [[ "$content" != *"claude smoke ok"* ]]; then
 fi
 
 echo "✓ real claude smoke passed"
-echo "  cost=\$$cost  turns=$turns  duration=${duration}ms"
+echo "  turns=$turns  duration=${duration}ms"

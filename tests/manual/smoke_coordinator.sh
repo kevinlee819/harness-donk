@@ -39,10 +39,9 @@ EOF
 )
 
 result=$(echo "$RESP" | jq -r '.result')
-cost=$(echo "$RESP" | jq -r '.total_cost_usd')
 turns=$(echo "$RESP" | jq -r '.num_turns')
 
-echo "$RESP" | jq '{result,total_cost_usd,num_turns}'
+echo "$RESP" | jq '{result,num_turns}'
 echo
 echo "result text: $result"
 
@@ -60,5 +59,5 @@ grep -q "文件范围" "$first_spec" || { echo "✗ spec missing 文件范围" >
 grep -q "验收" "$first_spec" || { echo "✗ spec missing 验收清单" >&2; exit 1; }
 
 echo "✓ coordinator smoke passed"
-echo "  cost=\$$cost  turns=$turns"
+echo "  turns=$turns"
 echo "  queued: $n task(s), spec: $first_spec"

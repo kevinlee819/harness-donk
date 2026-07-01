@@ -68,7 +68,6 @@ CREATE TABLE IF NOT EXISTS calls (
   backend       TEXT NOT NULL,
   session_id    TEXT,
   exit_code     INTEGER,
-  cost_usd      REAL,                     -- 不可获取时 NULL
   num_turns     INTEGER,
   duration_ms   INTEGER,
   files_changed INTEGER
@@ -80,9 +79,9 @@ CREATE INDEX IF NOT EXISTS idx_calls_task ON calls(task_id);
 CREATE TABLE IF NOT EXISTS events (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   ts         TEXT NOT NULL,
-  event_type TEXT NOT NULL                -- needs_decision/task_completed/task_failed/budget_exceeded
+  event_type TEXT NOT NULL                -- needs_decision/task_completed/task_failed/task_blocked
              CHECK (event_type IN ('needs_decision','task_completed',
-                                   'task_failed','budget_exceeded')),
+                                   'task_failed','task_blocked')),
   task_id    TEXT REFERENCES tasks(id),
   payload    TEXT NOT NULL,               -- JSON
   delivered  INTEGER NOT NULL DEFAULT 0   -- 0/1
@@ -119,13 +118,6 @@ FROM tasks t
 JOIN sessions s ON s.task_id = t.id
 WHERE t.status='working'
   AND s.last_seen < datetime('now', '-' || :threshold || ' minutes');
-```
-
-**今日成本**：
-
-```sql
-SELECT COALESCE(SUM(cost_usd), 0) FROM calls
-WHERE ts >= datetime('now', 'start of day');
 ```
 
 ---
@@ -349,7 +341,6 @@ max_retries: 3
 INI / 简化 KV：
 
 ```ini
-budget_daily_usd = 10.00
 notify_channel   = tmux      # tmux / desktop / webhook
 session_resume_cap = 6
 dead_worker_minutes = 10

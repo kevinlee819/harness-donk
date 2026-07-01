@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Optional
 
 from harness import db
-from harness import budget
 
 
 # ── data loaders ──────────────────────────────────────────────────
@@ -349,22 +348,14 @@ def run(stdscr) -> None:
     flash_until = 0.0
     cached_tasks: list[tuple] = []
     cached_at = 0.0
-    cached_cost: float = 0.0
-    cached_budget: float = 0.0
 
     def refresh_data():
-        nonlocal cached_tasks, cached_at, cached_cost, cached_budget
+        nonlocal cached_tasks, cached_at
         nonlocal last_action_text, last_action_age
         try:
             cached_tasks = db.query_status()
         except Exception:
             cached_tasks = []
-        try:
-            cached_cost = budget.today_cost()
-            cached_budget = budget.daily_limit()
-        except Exception:
-            cached_cost = 0.0
-            cached_budget = 0.0
         act = _last_coordinator_action(project)
         if act:
             last_action_text, last_action_age = act
@@ -397,15 +388,9 @@ def run(stdscr) -> None:
                 return
             continue
 
-        # Header row: project name + cost
-        proj_label = project.name
-        cost_str = f"${cached_cost:.2f}"
-        if cached_budget > 0:
-            cost_str += f" / ${cached_budget:.2f}"
-        header = f"  🫏  {proj_label}"
+        # Header row: project name
+        header = f"  🫏  {project.name}"
         _addstr_clip(stdscr, 0, 0, header, curses.A_BOLD)
-        _addstr_clip(stdscr, 0, W - len(cost_str) - 2, cost_str,
-                     curses.color_pair(PAIRS["DIM"]))
 
         # ── zone ② tasks ──────────────────────────────────
         list_top = 2
@@ -478,12 +463,11 @@ def run(stdscr) -> None:
         else:
             left = "🤖 (no coordinator activity yet)"
             left_attr = curses.color_pair(PAIRS["DIM"])
-        right = f"{cnt_str}  ·  {cost_str}"
-        # Reserve room for `right` on the far right; truncate `left` so it can't
-        # overlap. `right` is short (≤30 cols typically); give `left` whatever
-        # is left, minus a 2-col gutter.
-        left_budget = max(10, W - len(right) - 3)
-        left_trunc = left[:left_budget]
+        right = cnt_str
+        # Reserve room for `right` on the far right; truncate `left` so it
+        # can't overlap. Give `left` whatever is left, minus a 2-col gutter.
+        left_room = max(10, W - len(right) - 3)
+        left_trunc = left[:left_room]
         _addstr_clip(stdscr, status_y + 1, 0, left_trunc, left_attr)
         right_x = max(0, W - len(right) - 1)
         _addstr_clip(stdscr, status_y + 1, right_x, right,

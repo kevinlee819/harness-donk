@@ -189,7 +189,6 @@ class WorkerThread(threading.Thread):
 
             ok = bool(resp.get("ok"))
             new_sid = resp.get("session_id") or ""
-            cost = resp.get("cost_usd")
             turns = resp.get("num_turns")
             dur = resp.get("duration_ms") or 0
             fc = resp.get("files_changed") or 0
@@ -201,7 +200,7 @@ class WorkerThread(threading.Thread):
 
             db.log_call(
                 j.task_id, j.worker_id, j.backend, sid or None,
-                0 if ok else 1, cost, turns, dur, fc,
+                0 if ok else 1, turns, dur, fc,
             )
 
             if not ok:

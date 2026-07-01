@@ -365,7 +365,6 @@ harness setup
 
 ```ini
 # ~/.config/harness/config
-budget_daily_usd=10          # 日预算 USD，超限停止新派
 session_resume_cap=6         # 同一对话续接上限；到顶开新会话防上下文走形
 dead_worker_threshold_min=10 # transient 状态超时即判死 worker，自动重派
 blocked_timeout_hours=72     # BLOCKED 任务卡过此时间 → 标 FAILED
@@ -587,11 +586,10 @@ harness events ack <eid>...
 `harness init` 会往项目的 `.claude/settings.json` 写入 `statusLine` 配置，让 Claude Code 协调者会话**底部状态栏**每 5 秒刷一次：
 
 ```
-🫏 W:2 Q:1 B:0 F:0 M:7 · $1.24/$10 · w2/4 · Opus 4.7
-   │   │   │   │   │      │           │       │
-   │   │   │   │   │      │           │       └─ 当前模型
-   │   │   │   │   │      │           └─ worker 池 busy/total
-   │   │   │   │   │      └─ 今日成本 / 日预算（>50% 黄、>90% 红）
+🫏 W:2 Q:1 B:0 F:0 M:7 · w2/4 · Opus 4.7
+   │   │   │   │   │      │       │
+   │   │   │   │   │      │       └─ 当前模型
+   │   │   │   │   │      └─ worker 池 busy/total
    │   │   │   │   └─ 今日 merged 数
    │   │   │   └─ failed
    │   │   └─ blocked（红色，有就提醒）
@@ -658,13 +656,12 @@ harness-task answer  <task_id> <text>   # 答复 BLOCKED 任务
 `~/.config/harness/config`：
 
 ```ini
-budget_daily_usd=10           # 日预算 USD；累计超即停派新任务
 session_resume_cap=6          # 同会话 resume 上限；到顶强制开新 session
 dead_worker_threshold_min=10  # transient 状态 + updated 老于此值 → 判死重派
 blocked_timeout_hours=72      # BLOCKED 卡过此时长 → FAILED + 通知协调者
 ```
 
-`~/.config/harness/projects.list`：每行一个项目绝对路径，`harness init` 自动追加（幂等）。未来跨项目预算聚合用。
+`~/.config/harness/projects.list`：每行一个项目绝对路径，`harness init` 自动追加（幂等）。
 
 ### 项目级（每个项目一份，进 git）
 
@@ -753,11 +750,7 @@ reviewer: claude     # 强制 claude 当裁判，即使全局是 codex
 
 ### Q: 钱在哪里看
 
-```bash
-sqlite3 .harness/harness.db "SELECT date(ts), SUM(cost_usd) FROM calls GROUP BY date(ts) ORDER BY 1 DESC LIMIT 7"
-```
-
-或者跑日预算检查：`harness status` 顶部会显示今日累计。注意 codex 的 `cost_usd` 当前是 NULL（CLI 没暴露 USD 字段，只有 token usage）。
+**harness 不再追踪 cost**。OAuth/订阅用户按月付固定费用（per-request USD 意义不大）、codex CLI 从不吐 USD、任何 shadow 折算都是半真半假——展示 $0.00 比不展示更误导，所以整块删了。要查花销去 provider 自己的控制台（Anthropic Console / OpenAI usage dashboard）。
 
 ### Q: 通知图标是个灰色插头不是驴
 

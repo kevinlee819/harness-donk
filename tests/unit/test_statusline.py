@@ -54,7 +54,6 @@ class StatuslineTests(unittest.TestCase):
         self.assertIn("W:0", out)
         self.assertIn("Q:0", out)
         self.assertIn("M:0", out)
-        self.assertIn("$0.00/$10", out)
         self.assertIn("Opus 4.7", out)
 
     def test_counts_tasks_by_status(self) -> None:
@@ -75,13 +74,6 @@ class StatuslineTests(unittest.TestCase):
         out = strip(self._render({}))
         self.assertIn("M:1", out)
 
-    def test_today_cost_summed(self) -> None:
-        db.add_task("T-c", priority=5, spec_path="/dev/null")
-        db.log_call("T-c", "w1", "claude", "sid", 0, 1.23, 1, 1000, 1)
-        db.log_call("T-c", "w1", "claude", "sid", 0, 2.50, 1, 1000, 1)
-        out = strip(self._render({}))
-        self.assertIn("$3.73", out)
-
     def test_worker_pool_busy_count(self) -> None:
         for wid, state in [("w1", "working"), ("w2", "idle"), ("w3", "working")]:
             wd = self.proj / ".harness" / "workers" / wid
@@ -91,19 +83,6 @@ class StatuslineTests(unittest.TestCase):
         self.assertIn("w2/3", out)
 
     # ---- color thresholds -------------------------------------------------
-
-    def test_budget_color_green_under_50pct(self) -> None:
-        db.add_task("T-x", priority=5, spec_path="/dev/null")
-        db.log_call("T-x", "w1", "claude", "sid", 0, 2.0, 1, 1, 0)
-        raw = self._render({})
-        # green is \x1b[32m
-        self.assertIn("\x1b[32m$2.00", raw)
-
-    def test_budget_color_red_over_90pct(self) -> None:
-        db.add_task("T-x", priority=5, spec_path="/dev/null")
-        db.log_call("T-x", "w1", "claude", "sid", 0, 9.5, 1, 1, 0)
-        raw = self._render({})
-        self.assertIn("\x1b[31m$9.50", raw)
 
     def test_blocked_count_red_when_nonzero(self) -> None:
         db.add_task("T-b", priority=5, spec_path="/dev/null")
@@ -139,14 +118,6 @@ class StatuslineTests(unittest.TestCase):
         out = strip(self._render({"model": {"id": "claude-opus-4-7-20260416"}}))
         self.assertIn("claude-opus-4-7", out)
         self.assertNotIn("20260416", out)
-
-    def test_custom_budget_limit_from_config(self) -> None:
-        (self.conf_dir / "config").write_text("budget_daily_usd=50\n")
-        db.add_task("T-y", priority=5, spec_path="/dev/null")
-        db.log_call("T-y", "w1", "claude", "sid", 0, 1.0, 1, 1, 0)
-        out = strip(self._render({}))
-        self.assertIn("$1.00/$50", out)
-
 
 if __name__ == "__main__":
     unittest.main()

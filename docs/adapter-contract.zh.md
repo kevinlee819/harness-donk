@@ -25,7 +25,6 @@
 |------|------|------|
 | 4. 会话续接 | `--resume <id>` / `--session <id>` / `--last`；ID 可程序化获取 | 仅派**单发**任务；BLOCKED 后重发完整上下文 |
 | 5. 工具权限控制 | allowlist / 沙箱 / 审批模式 | 仅靠 worktree 隔离 + gate 兜底，**禁触敏感仓库** |
-| 6. 成本数据 | 输出含 cost / token usage | `calls.cost_usd` 写 NULL，预算闸按调用次数估算 |
 
 每个 backend 在 `adapters/<name>.sh` 顶部声明能力位图：
 
@@ -34,11 +33,12 @@
 ADAPTER_CAP_SESSION_RESUME=1
 ADAPTER_CAP_SESSION_ID_PROGRAMMATIC=1    # Claude / Codex 0.142+ / OpenCode: 1
 ADAPTER_CAP_TOOL_PERMISSION=1
-ADAPTER_CAP_COST_REPORT=1                # Codex: 0（只有 token usage 无 USD）
 ADAPTER_PARALLEL_PER_WORKTREE=0          # Codex: 0（git index 竞争，必须串行）
 ```
 
 编排器据此限制可派任务类型、决定是否加 flock。
+
+**成本追踪已移除**（2026-07-01）。adapter 不再输出 `cost_usd` 字段，也没有预算闸。花销以 provider 自己的控制台（Anthropic / OpenAI usage）为准——详见 [getting-started.zh.md §11](getting-started.zh.md#q-钱在哪里看)。
 
 ---
 
@@ -62,7 +62,6 @@ adapter 是一段 bash 脚本，**唯一入口** `adapters/<name>.sh`，**接口
   "ok": true|false,
   "session_id": "string|null",
   "result": "string (自然语言摘要，仅给人/排障)",
-  "cost_usd": 0.0,
   "num_turns": 0,
   "files_changed": 0,
   "error": null|"string"
@@ -70,7 +69,7 @@ adapter 是一段 bash 脚本，**唯一入口** `adapters/<name>.sh`，**接口
 ```
 
 - `ok=false` 时 `error` 必填，简述失败原因（如 "rate_limited" / "context_window_exceeded" / "tool_denied"）。
-- `cost_usd` / `num_turns` 若 backend 不报，填 `null`。
+- `num_turns` 若 backend 不报，填 `null`。
 - `files_changed` 由 adapter 在工作目录跑 `git diff --name-only HEAD | wc -l` 得到（adapter 兜底而非依赖 backend）。
 
 ### 3.3 副作用
@@ -95,7 +94,6 @@ set -euo pipefail
 ADAPTER_CAP_SESSION_RESUME=1
 ADAPTER_CAP_SESSION_ID_PROGRAMMATIC=1
 ADAPTER_CAP_TOOL_PERMISSION=1
-ADAPTER_CAP_COST_REPORT=1
 ADAPTER_PARALLEL_PER_WORKTREE=1
 
 : "${ADAPTER_TASK_FILE:?}"
@@ -133,7 +131,7 @@ jq -n --arg ts "$TS" --argjson resp "$RESP" \
 IS_ERR=$(echo "$RESP" | jq -r '.is_error // false')
 if [[ "$IS_ERR" == "true" || $EXIT -ne 0 ]]; then
   echo "$RESP" | jq -c '{ok:false, session_id:.session_id, result:"", \
-    cost_usd:null, num_turns:null, files_changed:0, error:(.error // "exit_'"$EXIT"'")}'
+    num_turns:null, files_changed:0, error:(.error // "exit_'"$EXIT"'")}'
   exit 0
 fi
 
@@ -141,7 +139,7 @@ FILES_CHANGED=$(git diff --name-only HEAD 2>/dev/null | wc -l | tr -d ' ')
 
 echo "$RESP" | jq -c --argjson fc "$FILES_CHANGED" \
   '{ok:true, session_id:.session_id, result:.result, \
-    cost_usd:.cost_usd, num_turns:.num_turns, files_changed:$fc, error:null}'
+    num_turns:.num_turns, files_changed:$fc, error:null}'
 ```
 
 ### 4.2 自检 — `harness doctor` 增加该 backend

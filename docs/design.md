@@ -8,24 +8,24 @@ This system is a personal workflow-level automated coding harness. It exposes a 
 
 Design goals in priority order:
 
-1. **Single entry point, context ownership**: The user only faces one conversation interface; the context for sessions, tasks, costs, and artifacts is all held and managed by this system — not scattered across the engines being called.
+1. **Single entry point, context ownership**: The user only faces one conversation interface; the context for sessions, tasks, and artifacts is all held and managed by this system — not scattered across the engines being called.
 2. **Self-driving**: Tasks enter from the queue and automatically flow through dispatch, execution, validation, and merge; failures are automatically fed back for retry; escalation to humans only when a real decision is needed.
 3. **Interrupt-on-demand, always observable**: The coordinator is silent by default, only proactively reaching out when a decision is needed, acceptance is pending, or a failure occurs; when the user wants to know progress, task state and each agent's work is always queryable.
 4. **Reliable**: Any process crashing at any moment — system state is not lost or corrupted; can resume from disk.
-5. **Controllable**: Dangerous operations are intercepted deterministically (not via prompt constraints); changes can be reviewed before merging; costs have hard budget gates.
+5. **Controllable**: Dangerous operations are intercepted deterministically (not via prompt constraints); changes can be reviewed before merging.
 6. **Simple**: Implemented with bash + standard Unix tools (jq, sqlite3, tmux); no persistent services or specialized protocols; single-machine operation.
 
 Non-goals: cross-machine distributed orchestration, peer agent networks (A2A), general multi-tenant platforms. Not built until requirements emerge.
 
 ## 2. Core Design Principles
 
-**Principle 1: Single entry point holds context.** The user never directly uses the underlying engines (no bare `claude`). The entry command starts a coordinator session as the sole conversation interface; the ledger for sessions, costs, and artifacts is recorded by this system in the project's `.harness/`. Surrendering context ownership makes this system a name without substance — this is a non-negotiable dividing line.
+**Principle 1: Single entry point holds context.** The user never directly uses the underlying engines (no bare `claude`). The entry command starts a coordinator session as the sole conversation interface; the ledger for sessions and artifacts is recorded by this system in the project's `.harness/`. Surrendering context ownership makes this system a name without substance — this is a non-negotiable dividing line.
 
 **Principle 2: Intelligent judgment and deterministic execution are separated.** The coordinator (LLM) is only responsible for judgment and decisions: decomposing tasks, deciding what to dispatch to whom, interpreting results, deciding whether to escalate to humans. The actual process driving is handled by the deterministic dumb loop + adapter. The coordinator expresses intent through **script tools** we provide (which essentially writes tasks to the queue); it never uses send-keys to drive other agents itself.
 
 **Principle 3: CLI is the protocol.** Calling any execution agent uses no specialized protocol — just Unix subprocesses: prompts go in via stdin/file, JSON comes out on stdout, exit codes indicate success/failure. A single call is "a task brief" not "a conversation round" — the agent runs autonomously through multiple think→tool→observe cycles internally until done or at the turn limit.
 
-**Principle 4: Files, git, embedded SQLite are the medium.** Agents don't communicate via memory or network. State is layered by audience: **the interface for agents and humans is files** (spec, status, guidance, inbox); **the orchestrator's private transactional state is SQLite** (queue, state machine, transition history, session registry, cost ledger). Code artifacts are committed to git. State only lives on disk; crash recovery is natural.
+**Principle 4: Files, git, embedded SQLite are the medium.** Agents don't communicate via memory or network. State is layered by audience: **the interface for agents and humans is files** (spec, status, guidance, inbox); **the orchestrator's private transactional state is SQLite** (queue, state machine, transition history, session registry, call log). Code artifacts are committed to git. State only lives on disk; crash recovery is natural.
 
 **Principle 5: Processes are ephemeral, conversations are persistent.** Each interaction is an independent short-lived process call, sharing conversation history via session ID (`--resume`). Session resumption has a cap; when reached, a checkpoint is written to disk, a new session begins (fresh context, preventing long-session drift).
 
@@ -106,7 +106,7 @@ SID=$(echo "$RESP" | jq -r '.session_id')
 RESP=$(timeout 900 claude -p "$(cat "$FOLLOWUP")" --resume "$SID" --output-format json --max-turns 8)
 ```
 
-session_id can be obtained programmatically and recorded; `--output-format json` captures `.result` (for humans) and `.session_id`/`.cost_usd`/`.num_turns` (for machines); custom session IDs must be valid UUIDs.
+session_id can be obtained programmatically and recorded; `--output-format json` captures `.result` (for humans) and `.session_id`/`.num_turns` (for machines); custom session IDs must be valid UUIDs.
 
 **Codex (adapter: codex.sh)**
 
@@ -172,7 +172,7 @@ CREATE TABLE sessions (
 );
 CREATE TABLE calls (
   id INTEGER PRIMARY KEY, ts TEXT, task_id TEXT, worker_id TEXT, backend TEXT,
-  session_id TEXT, exit_code INTEGER, cost_usd REAL, num_turns INTEGER,
+  session_id TEXT, exit_code INTEGER, num_turns INTEGER,
   duration_ms INTEGER, files_changed INTEGER
 );
 ```
@@ -241,14 +241,14 @@ File ownership follows the single-writer principle: **any file has exactly one w
 ├── src/harness/                  #    Python layer: parts touching SQL / state machine / concurrency
 │   ├── db.py                     #      SQLite short-connection + true parameterization
 │   ├── orchestrator.py + worker.py + merge.py   # parallel worker pool + serial merge
-│   ├── adapter.py notify.py budget.py config.py atomic_write.py
+│   ├── adapter.py notify.py config.py atomic_write.py
 │   └── cli/{harness_task,db_cli,orchestrator_cli}.py   # console scripts
 ├── lib/                          #    Remaining bash: gate.sh + python_env.sh
 └── templates/                    #    AGENTS.md template, settings.json template, gitignore fragment
 
 ~/.config/harness/                # ② Global config (one per machine)
-├── config                        #    Global daily budget, notification channel credentials
-└── projects.list                 #    Registered project registry (global budget aggregation, harness ls)
+├── config                        #    Notification channel credentials
+└── projects.list                 #    Registered project registry (harness ls)
 
 <project>/                        # ③ Any onboarded project (clean: only its own code)
 ├── src/  tests/  Makefile        #    Project's own code
@@ -257,7 +257,7 @@ File ownership follows the single-writer principle: **any file has exactly one w
 ├── .claude/settings.json         #    Hooks (in git, team-shared security gate)
 ├── specs/<task_id>.md            #    Task specs (in git: what AI did is project history)
 └── .harness/                     #    Runtime state (entirely gitignored, disappears if project deleted)
-    ├── harness.db                #    This project's queue/state machine/transition history/sessions/cost ledger
+    ├── harness.db                #    This project's queue/state machine/transition history/sessions/call log
     ├── workers/<id>/{status,guidance}.json   # worker exclusive write
     ├── inbox/<id>.answer         #    Human/coordinator exclusive write
     └── logs/raw/                 #    Raw call JSON archive
@@ -265,8 +265,6 @@ File ownership follows the single-writer principle: **any file has exactly one w
 <project sibling>/.worktrees/<project>/<task_id>/   # ④ worktrees in sibling directory outside project
                                   #    Avoids embedding in main workspace polluting git status
 ```
-
-Global budget gate is implemented by `bin/harness` aggregating each project's `calls` table per `projects.list`; API console spend limit as final backstop.
 
 ## 7. Engineering Constraints (Implementation Must Follow)
 
@@ -279,7 +277,7 @@ Global budget gate is implemented by `bin/harness` aggregating each project's `c
 
 ### 7.2 Communication Contract
 
-- One adapter per backend; normalizes `json` / `stream-json` / Codex NDJSON into the unified internal structure `{ok, session_id, result, cost_usd, num_turns, error}`; orchestration logic never touches native formats.
+- One adapter per backend; normalizes `json` / `stream-json` / Codex NDJSON into the unified internal structure `{ok, session_id, result, num_turns, error}`; orchestration logic never touches native formats.
 - Check error fields before using results: failed calls are often still valid JSON (`.is_error` / `.error`).
 - **Never parse model natural language output (`.result`) for control decisions**; machine-readable control signals always come from structured blackboard files written by instructed agents.
 - Prompts always go via stdin or file; never inline text containing quotes/`$`/backticks/newlines into the command line.
@@ -314,10 +312,9 @@ SQLite layer (orchestrator exclusive write):
 - Stop hook currently not implemented (completion handled by gate.sh + error feedback; see §4.3 and hooks/stop.md).
 - Hard policies use only command hooks, not HTTP hooks.
 
-### 7.6 Cost and Observability
+### 7.6 Observability
 
 - Each call INSERTs one row into the `calls` table; raw JSON archived to `logs/raw/` for debugging.
-- Budget gate is SQL: `SELECT COALESCE(SUM(cost_usd),0) FROM calls WHERE ts >= date('now');` compared to daily budget; when exceeded, kill switch stops dispatching and notifies coordinator.
 - Conversation plane runs on subscription; execution plane runs on programmatic quota (billed separately per API rate card as of 2026-06-15); configure a separate API key for the execution plane, enable prompt caching to amortize system prompts/file context sent repeatedly.
 
 ### 7.7 Security Baseline
@@ -362,7 +359,7 @@ Key: all three modes share the same coordinator context and the same `.harness/`
 
 The full process of the coordinator and execution agents is not shown to you by default. When you need to know, two granularities:
 
-- **Snapshot** (usually sufficient): `harness status` queries `.harness/harness.db`, giving each task's status, each agent's current progress, and today's spending on one screen. Structured truth; no screen-reading required.
+- **Snapshot** (usually sufficient): `harness status` queries `.harness/harness.db`, giving each task's status and each agent's current progress on one screen. Structured truth; no screen-reading required.
 - **Live view**:
   - `harness attach` (no argument): enter the coordinator tmux session (window 0 started by harness-infi).
   - `harness attach <worker_id>` (e.g. `w1`, `w2`): **worker live snapshot** — after phase 4, workers are Python threads inside the orchestrator process, no longer independent tmux panes; this command outputs that worker's current status.json, worktree path, any blocking guidance if present, and a summary of the most recent adapter call.
@@ -397,9 +394,8 @@ An empty repo has no tests and lint; the gate has nothing to check; **a project 
 | 3 | Parseable output (hard requirement) | `--json` single object or NDJSON | Regex extraction, marked low-confidence; dispatch low-risk tasks only |
 | 4 | Session resumption | `--resume/--session/--last`; ID obtainable programmatically | Single-shot tasks only; full context resent after BLOCKED |
 | 5 | Tool permission control | allowlist/sandbox/approval mode | Rely only on worktree isolation + gate backstop; **no sensitive repos** |
-| 6 | Cost data | Output contains cost/usage | `calls.cost_usd` written as NULL; budget gate estimates by call count |
 
-Contract essence: adapter must normalize to `{ok, session_id, result, cost_usd, num_turns, error}`; missing fields declared in backend capability bitmap; orchestrator restricts dispatchable task types accordingly. Note: this contract is for **execution plane** backends; the conversation plane coordinator engine is currently fixed as Claude Code (can also be replaced with any engine with good interactive session capabilities, but requires separate adaptation, not covered by this table).
+Contract essence: adapter must normalize to `{ok, session_id, result, num_turns, error}`; missing fields declared in backend capability bitmap; orchestrator restricts dispatchable task types accordingly. Note: this contract is for **execution plane** backends; the conversation plane coordinator engine is currently fixed as Claude Code (can also be replaced with any engine with good interactive session capabilities, but requires separate adaptation, not covered by this table).
 
 ## 11. Known Risks and Trade-off Notes
 
@@ -409,7 +405,7 @@ Contract essence: adapter must normalize to `{ok, session_id, result, cost_usd, 
 - OpenCode server mode has a known issue with sub-agent hangs → use the `opencode run` CLI path to avoid it; if switching to serve/SDK, verify the fix first.
 - Session resume is context reconstruction, not memory snapshot; long-session recovery has latency and drift risk → resumption cap + checkpoint to disk as mitigation; cannot be omitted.
 - Full-bash complexity ceiling: when state machine and adapter exceed ~500 lines, consider migrating orchestrator body to Python (keeping file protocol and harness.db schema unchanged, transparent to agents; Python standard library includes sqlite3; migration cost is low).
-- SQLite sacrifices direct state readability (can't `cat`) → `harness status` output of current queue/task/cost snapshot compensates; raw call JSON archived to `logs/raw/`.
+- SQLite sacrifices direct state readability (can't `cat`) → `harness status` output of current queue/task snapshot compensates; raw call JSON archived to `logs/raw/`.
 - Single-machine limitation: tmux and file/SQLite blackboard don't span machines; introducing multi-machine requires object storage blackboard or task distribution service, an architecture upgrade; explicitly not done currently.
 
 ## 12. Appendix: Fields and Conventions

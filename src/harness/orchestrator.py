@@ -26,7 +26,6 @@ from typing import Optional
 
 from harness import db
 from harness import merge as merge_mod
-from harness.budget import under_limit, today_cost, daily_limit
 from harness.config import read_config
 from harness.merge import MergeRequest
 from harness.notify import notify
@@ -197,21 +196,6 @@ def _scan_resume_blocked(cfg: RuntimeConfig) -> int:
     return n
 
 
-def _budget_guard(cfg: RuntimeConfig) -> bool:
-    if under_limit():
-        return True
-    today = datetime.datetime.utcnow().strftime("%Y-%m-%d")
-    marker = cfg.project_dir / ".harness" / f".budget-exceeded-{today}"
-    if not marker.is_file():
-        cost = today_cost()
-        limit = daily_limit()
-        notify("budget_exceeded", None,
-               {"cost_usd": cost, "limit_usd": limit, "date": today})
-        marker.touch()
-        log.info("budget exceeded: $%.2f > $%.2f (kill switch engaged)", cost, limit)
-    return False
-
-
 def _make_job(cfg: RuntimeConfig, worker_id: str, task_id: str,
               spec_path: str, kind: str) -> WorkerJob:
     return WorkerJob(
@@ -338,9 +322,8 @@ def run(cfg: RuntimeConfig) -> int:
             _timeout_blocked()
             resumed = _scan_resume_blocked(cfg)
             spawned_any = spawned_any or resumed > 0
-            if _budget_guard(cfg):
-                claimed = _claim_into_pool(cfg)
-                spawned_any = spawned_any or claimed > 0
+            claimed = _claim_into_pool(cfg)
+            spawned_any = spawned_any or claimed > 0
 
         # Drain merges serially (main thread). The on_done callback clears
         # the pending_merge bookkeeping so reap_orphans no longer protects.

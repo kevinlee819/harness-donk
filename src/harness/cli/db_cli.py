@@ -85,16 +85,10 @@ def cmd_log_call(args: argparse.Namespace) -> int:
         backend=args.backend,
         session_id=args.session_id or None,
         exit_code=int(args.exit_code),
-        cost_usd=_parse_optional_num(args.cost_usd, float),
         num_turns=_parse_optional_num(args.num_turns, int),
         duration_ms=_parse_optional_num(args.duration_ms, int),
         files_changed=int(args.files_changed),
     )
-    return 0
-
-
-def cmd_today_cost(_args: argparse.Namespace) -> int:
-    print(db.today_cost())
     return 0
 
 
@@ -250,13 +244,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("backend")
     s.add_argument("session_id")
     s.add_argument("exit_code")
-    s.add_argument("cost_usd")
     s.add_argument("num_turns")
     s.add_argument("duration_ms")
     s.add_argument("files_changed")
     s.set_defaults(func=cmd_log_call)
-
-    sub.add_parser("today-cost").set_defaults(func=cmd_today_cost)
 
     s = sub.add_parser("query-status")
     s.add_argument("task_id", nargs="?", default=None)
@@ -275,7 +266,7 @@ def build_parser() -> argparse.ArgumentParser:
     s = sub.add_parser("event-write")
     s.add_argument("event_type",
                    choices=["needs_decision", "task_completed",
-                            "task_failed", "budget_exceeded"])
+                            "task_failed", "task_blocked"])
     s.add_argument("--task", dest="task_id", default=None)
     s.add_argument("--payload", default=None,
                    help="JSON string; if omitted reads stdin")

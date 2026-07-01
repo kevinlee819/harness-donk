@@ -25,7 +25,6 @@ This document defines the contract for connecting a new CLI (or a new model conn
 |-----------|-------------|----------|
 | 4. Session resumption | `--resume <id>` / `--session <id>` / `--last`; ID obtainable programmatically | Single-shot tasks only; resend full context after BLOCKED |
 | 5. Tool permission control | allowlist / sandbox / approval mode | Rely only on worktree isolation + gate backstop; **no sensitive repos** |
-| 6. Cost data | Output contains cost / token usage | `calls.cost_usd` written as NULL; budget gate estimates by call count |
 
 Each backend declares its capability bitmap at the top of `adapters/<name>.sh`:
 
@@ -34,11 +33,14 @@ Each backend declares its capability bitmap at the top of `adapters/<name>.sh`:
 ADAPTER_CAP_SESSION_RESUME=1
 ADAPTER_CAP_SESSION_ID_PROGRAMMATIC=1    # Claude / Codex 0.142+ / OpenCode: 1
 ADAPTER_CAP_TOOL_PERMISSION=1
-ADAPTER_CAP_COST_REPORT=1                # Codex: 0 (token usage only, no USD)
 ADAPTER_PARALLEL_PER_WORKTREE=0          # Codex: 0 (git index race; must be serial)
 ```
 
 The orchestrator uses this to restrict dispatchable task types and decide whether to add flock.
+
+**Cost tracking removed** (2026-07-01). Adapters no longer emit a `cost_usd` field
+and there is no budget gate. Providers' own consoles (Anthropic / OpenAI) are
+authoritative — see [getting-started.md §11](getting-started.md#q-where-do-i-see-money-spent).
 
 ---
 
@@ -62,7 +64,6 @@ Regardless of the backend's native output format, the adapter must output **sing
   "ok": true|false,
   "session_id": "string|null",
   "result": "string (natural language summary, for humans/debugging only)",
-  "cost_usd": 0.0,
   "num_turns": 0,
   "files_changed": 0,
   "error": null|"string"
@@ -70,7 +71,7 @@ Regardless of the backend's native output format, the adapter must output **sing
 ```
 
 - When `ok=false`, `error` must be filled with a brief failure description (e.g. "rate_limited" / "context_window_exceeded" / "tool_denied").
-- `cost_usd` / `num_turns` can be `null` if the backend doesn't report them.
+- `num_turns` can be `null` if the backend doesn't report it.
 - `files_changed` is obtained by the adapter running `git diff --name-only HEAD | wc -l` in the working directory (adapter provides this fallback, not relying on the backend).
 
 ### 3.3 Side Effects
@@ -95,7 +96,6 @@ set -euo pipefail
 ADAPTER_CAP_SESSION_RESUME=1
 ADAPTER_CAP_SESSION_ID_PROGRAMMATIC=1
 ADAPTER_CAP_TOOL_PERMISSION=1
-ADAPTER_CAP_COST_REPORT=1
 ADAPTER_PARALLEL_PER_WORKTREE=1
 
 : "${ADAPTER_TASK_FILE:?}"
@@ -133,7 +133,7 @@ jq -n --arg ts "$TS" --argjson resp "$RESP" \
 IS_ERR=$(echo "$RESP" | jq -r '.is_error // false')
 if [[ "$IS_ERR" == "true" || $EXIT -ne 0 ]]; then
   echo "$RESP" | jq -c '{ok:false, session_id:.session_id, result:"", \
-    cost_usd:null, num_turns:null, files_changed:0, error:(.error // "exit_'"$EXIT"'")}'
+    num_turns:null, files_changed:0, error:(.error // "exit_'"$EXIT"'")}'
   exit 0
 fi
 
@@ -141,7 +141,7 @@ FILES_CHANGED=$(git diff --name-only HEAD 2>/dev/null | wc -l | tr -d ' ')
 
 echo "$RESP" | jq -c --argjson fc "$FILES_CHANGED" \
   '{ok:true, session_id:.session_id, result:.result, \
-    cost_usd:.cost_usd, num_turns:.num_turns, files_changed:$fc, error:null}'
+    num_turns:.num_turns, files_changed:$fc, error:null}'
 ```
 
 ### 4.2 Self-Check — Add This Backend to `harness doctor`

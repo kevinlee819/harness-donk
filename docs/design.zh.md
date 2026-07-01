@@ -8,24 +8,24 @@
 
 设计目标按优先级:
 
-1. **单一入口、上下文归我所有**:用户只面对一个对话面;会话、任务、成本、产物的上下文全部由本系统持有和管理,而非散落在被调用的引擎里。
+1. **单一入口、上下文归我所有**:用户只面对一个对话面;会话、任务、产物的上下文全部由本系统持有和管理,而非散落在被调用的引擎里。
 2. **自驱动**:任务从队列进入,经派发、执行、校验、合并自动流转;失败自动回灌重试;只在真正需要决策时升级到人。
 3. **按需打扰、随时可观测**:协调者默认沉默,只在需要决策、验收、故障时主动找用户;用户想了解进展时,任务状态与每个 agent 的工作随时可查。
 4. **可靠**:任何进程在任何时刻崩溃,系统状态不丢、不脏,可从磁盘恢复续跑。
-5. **可控**:危险操作被确定性拦截(非靠提示词约束);变更合并前可审查;成本有硬性预算闸。
+5. **可控**:危险操作被确定性拦截(非靠提示词约束);变更合并前可审查。
 6. **简单**:bash + 标准 Unix 工具(jq、sqlite3、tmux)实现,无需常驻服务或专用协议;单机运行。
 
 非目标:跨机器分布式编排、对等 agent 网络(A2A)、通用多租户平台。需求出现前不做。
 
 ## 2. 核心设计原则
 
-**原则一:统一入口持有上下文。** 用户永远不直接使用底层引擎(不裸跑 `claude`)。入口命令启动一个协调者会话作为唯一对话面;session、成本、产物的账本由本系统记录在项目的 `.harness/` 中。放弃上下文所有权,本系统即名存实亡——这是不可妥协的分界线。
+**原则一:统一入口持有上下文。** 用户永远不直接使用底层引擎(不裸跑 `claude`)。入口命令启动一个协调者会话作为唯一对话面;session、产物的账本由本系统记录在项目的 `.harness/` 中。放弃上下文所有权,本系统即名存实亡——这是不可妥协的分界线。
 
 **原则二:聪明的判断与确定的执行分离。** 协调者(LLM)只负责判断与决策:拆解任务、决定派什么给谁、判读结果、决定是否升级到人。真正的进程驱动由确定性的 dumb loop + adapter 承担。协调者通过我们提供的**脚本工具**下达指令(本质是写任务进队列),绝不自己用 send-keys 去驱动别的 agent。
 
 **原则三:CLI 即协议。** 调用任何执行 agent 都不使用专用协议,就是 Unix 子进程:提示词从 stdin/文件进,JSON 从 stdout 出,退出码表示成败。一次调用是"一份任务简报"而非"一轮对话"——agent 在调用内部自主运行多轮 think→工具→观察直到完成或达上限。
 
-**原则四:文件、git、嵌入式 SQLite 即媒介。** Agent 间不靠内存或网络通信。状态按受众分层:**面向 agent 与人的交互界面是文件**(spec、status、guidance、inbox);**编排器私有的事务性状态是 SQLite**(队列、状态机、迁移史、会话注册、成本账)。代码成果以 git commit 落盘。状态只活在磁盘,崩溃恢复天然成立。
+**原则四:文件、git、嵌入式 SQLite 即媒介。** Agent 间不靠内存或网络通信。状态按受众分层:**面向 agent 与人的交互界面是文件**(spec、status、guidance、inbox);**编排器私有的事务性状态是 SQLite**(队列、状态机、迁移史、会话注册、调用日志)。代码成果以 git commit 落盘。状态只活在磁盘,崩溃恢复天然成立。
 
 **原则五:进程临时、对话持久。** 每轮交互是独立短命进程调用,通过 session ID(`--resume`)共享对话历史。会话续接有上限,达上限后 checkpoint 落盘、开新会话(新鲜上下文,防长会话走形)。
 
@@ -106,7 +106,7 @@ SID=$(echo "$RESP" | jq -r '.session_id')
 RESP=$(timeout 900 claude -p "$(cat "$FOLLOWUP")" --resume "$SID" --output-format json --max-turns 8)
 ```
 
-session_id 可程序化获取并记账;`--output-format json` 取 `.result`(给人)与 `.session_id`/`.cost_usd`/`.num_turns`(给机器);自定义 session ID 须为合法 UUID。
+session_id 可程序化获取并记账;`--output-format json` 取 `.result`(给人)与 `.session_id`/`.num_turns`(给机器);自定义 session ID 须为合法 UUID。
 
 **Codex(adapter: codex.sh)**
 
@@ -172,7 +172,7 @@ CREATE TABLE sessions (
 );
 CREATE TABLE calls (
   id INTEGER PRIMARY KEY, ts TEXT, task_id TEXT, worker_id TEXT, backend TEXT,
-  session_id TEXT, exit_code INTEGER, cost_usd REAL, num_turns INTEGER,
+  session_id TEXT, exit_code INTEGER, num_turns INTEGER,
   duration_ms INTEGER, files_changed INTEGER
 );
 ```
@@ -241,14 +241,14 @@ sqlite3 .harness/harness.db "UPDATE tasks
 ├── src/harness/                  #    Python 层:碰 SQL / 状态机 / 并发的部分
 │   ├── db.py                     #      SQLite 短连接 + 真参数化
 │   ├── orchestrator.py + worker.py + merge.py   # 并行 worker 池 + 串行合并
-│   ├── adapter.py notify.py budget.py config.py atomic_write.py
+│   ├── adapter.py notify.py config.py atomic_write.py
 │   └── cli/{harness_task,db_cli,orchestrator_cli}.py   # console scripts
 ├── lib/                          #    残留 bash:gate.sh + python_env.sh
 └── templates/                    #    AGENTS.md 模板、settings.json 模板、gitignore 片段
 
 ~/.config/harness/                # ② 全局配置(每台机器一份)
-├── config                        #    全局日预算、通知渠道凭据
-└── projects.list                 #    已接管项目注册表(全局预算聚合、harness ls)
+├── config                        #    通知渠道凭据
+└── projects.list                 #    已接管项目注册表(harness ls)
 
 <project>/                        # ③ 任一被接管的项目(纯净:只有自己的代码)
 ├── src/  tests/  Makefile        #    项目自身代码
@@ -257,7 +257,7 @@ sqlite3 .harness/harness.db "UPDATE tasks
 ├── .claude/settings.json         #    hooks(进 git,团队共享安全门)
 ├── specs/<task_id>.md            #    任务规格(进 git:AI 做过什么即项目历史)
 └── .harness/                     #    运行时状态(整体 gitignore,删项目即随之消失)
-    ├── harness.db                #    本项目队列/状态机/迁移史/会话/成本账
+    ├── harness.db                #    本项目队列/状态机/迁移史/会话/调用日志
     ├── workers/<id>/{status,guidance}.json   # worker 独占写
     ├── inbox/<id>.answer         #    人/协调者独占写
     └── logs/raw/                 #    原始调用 JSON 留档
@@ -265,8 +265,6 @@ sqlite3 .harness/harness.db "UPDATE tasks
 <project 同级>/.worktrees/<project>/<task_id>/   # ④ worktree 置于项目外兄弟目录
                                   #    避免嵌入主工作区搅浑 git status
 ```
-
-全局预算闸由 `bin/harness` 按 `projects.list` 聚合各项目 `calls` 表实现;API 控制台 spend limit 作最后兜底。
 
 ## 7. 工程约束(实现必须遵守)
 
@@ -279,7 +277,7 @@ sqlite3 .harness/harness.db "UPDATE tasks
 
 ### 7.2 通信契约
 
-- 每个后端一个 adapter,把 `json` / `stream-json` / Codex NDJSON 归一化为统一内部结构 `{ok, session_id, result, cost_usd, num_turns, error}`;编排逻辑不接触原生格式。
+- 每个后端一个 adapter,把 `json` / `stream-json` / Codex NDJSON 归一化为统一内部结构 `{ok, session_id, result, num_turns, error}`;编排逻辑不接触原生格式。
 - 先检错误字段再用结果:失败调用往往仍是合法 JSON(`.is_error` / `.error`)。
 - **绝不解析模型自然语言输出(`.result`)做控制决策**;机器读的控制信号一律来自指示 agent 写的黑板结构化文件。
 - 提示词一律走 stdin 或文件,禁止把含引号/`$`/反引号/换行的文本内联拼进命令行。
@@ -314,10 +312,9 @@ SQLite 层(编排器独占写):
 - Stop hook 当前不实装(完成度由 gate.sh + 错误回灌覆盖,详见 §4.3 与 hooks/stop.md)。
 - 硬策略只用 command hook,不用 HTTP hook。
 
-### 7.6 成本与可观测
+### 7.6 可观测
 
 - 每次调用 INSERT 一行 `calls` 表;原始 JSON 另存 `logs/raw/` 排障。
-- 预算闸即 SQL:`SELECT COALESCE(SUM(cost_usd),0) FROM calls WHERE ts >= date('now');` 与日预算比较,超限即 kill switch 停止派发并通知协调者。
 - 对话平面走订阅、执行平面走程序化额度(2026-06-15 起按 API 价单独计费);为执行平面配独立 API key,启用 prompt caching 摊薄反复重发的系统提示/文件上下文。
 
 ### 7.7 安全基线
@@ -362,7 +359,7 @@ SQLite 层(编排器独占写):
 
 协调者与执行 agent 的全过程默认不展示给你。需要了解时,两种粒度:
 
-- **快照式**(默认够用):`harness status` 查 `.harness/harness.db`,一屏给出每个任务状态、各 agent 当前 progress、今日花费。结构化真相,无需你解读屏幕。
+- **快照式**(默认够用):`harness status` 查 `.harness/harness.db`,一屏给出每个任务状态、各 agent 当前 progress。结构化真相,无需你解读屏幕。
 - **现场式**:
   - `harness attach`(无参):进入协调者 tmux 会话(harness-infi 启动的 window 0)。
   - `harness attach <worker_id>`(如 `w1`、`w2`):**worker 现场快照** — 阶段四后 worker 是编排器进程内的 Python 线程,不再是独立 tmux pane;此命令输出该 worker 当前 status.json、worktree 路径、若有 blocking guidance 也一并打印、最近一次 adapter 调用摘要。
@@ -397,9 +394,8 @@ SQLite 层(编排器独占写):
 | 3 | 可解析输出(硬门槛) | --json 单对象或 NDJSON | 正则提取,标记低可信,仅派低风险任务 |
 | 4 | 会话续接 | --resume/--session/--last;ID 可程序化获取 | 仅单发任务;BLOCKED 后重发完整上下文 |
 | 5 | 工具权限控制 | allowlist/沙箱/审批模式 | 仅靠 worktree 隔离 + gate 兜底,禁触敏感仓库 |
-| 6 | 成本数据 | 输出含 cost/usage | calls 表记 NULL,预算闸按次数估算 |
 
-合同本质:adapter 必须归一化为 `{ok, session_id, result, cost_usd, num_turns, error}`,缺失字段在 backend 能力位图中声明,编排器据此限制可派任务类型。注意:此合同针对**执行平面**的后端;对话平面的协调者引擎当前固定为 Claude Code(也可替换为任何具备良好交互式会话的引擎,但需单独适配,不走此表)。
+合同本质:adapter 必须归一化为 `{ok, session_id, result, num_turns, error}`,缺失字段在 backend 能力位图中声明,编排器据此限制可派任务类型。注意:此合同针对**执行平面**的后端;对话平面的协调者引擎当前固定为 Claude Code(也可替换为任何具备良好交互式会话的引擎,但需单独适配,不走此表)。
 
 ## 11. 已知风险与权衡备忘
 
@@ -409,7 +405,7 @@ SQLite 层(编排器独占写):
 - OpenCode 服务端模式有子 agent 挂死的已知问题 → 选 `opencode run` CLI 路径绕开;若改用 serve/SDK 须先验证已修复。
 - 会话 resume 是上下文重建而非内存快照,长会话恢复有延迟与走形风险 → 续接封顶 + checkpoint 落盘对冲,不可省略。
 - 全 bash 复杂度天花板:状态机与 adapter 超过 ~500 行后,考虑 orchestrator 主体迁 Python(保持文件协议与 harness.db schema 不变,对 agent 透明;Python 标准库自带 sqlite3,迁移成本低)。
-- SQLite 牺牲状态直接可读性(不能 cat)→ `harness status` 输出当前队列/任务/成本快照弥补;原始调用 JSON 留档 `logs/raw/`。
+- SQLite 牺牲状态直接可读性(不能 cat)→ `harness status` 输出当前队列/任务快照弥补;原始调用 JSON 留档 `logs/raw/`。
 - 单机限制:tmux 与文件/SQLite 黑板均不跨机;需多机时引入对象存储黑板或任务分发服务,属架构升级,当前明确不做。
 
 ## 12. 附录:字段与约定

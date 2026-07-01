@@ -45,7 +45,7 @@ harness init [--backend claude|codex]    # bootstrap current directory: create .
                                          # --backend determines default cross_review_reviewer in AGENTS.md
                                          # (writer-reviewer auto-flip: claude→codex / codex→claude)
 harness status [--task <id>] [--history] # task list / single task details / transition history
-harness events pending                   # list pending events (needs_decision / failed / completed / budget_exceeded)
+harness events pending                   # list pending events (needs_decision / failed / completed / task_blocked)
 harness events ack <eid>...              # mark events as delivered (prevent coordinator from reporting duplicates)
 harness orphans [minutes]                # list orphan tasks (working/dispatched/gating updated > N min ago, default 5)
 harness watchdog-tick                    # run one watchdog cycle manually (see §8.2)
@@ -78,7 +78,7 @@ Curses-based dashboard. Three zones inside one terminal:
    `transitions`. Read-only — the task panel still drives all state changes via
    the DB.
 3. **Status bar** (bottom 2 rows): coordinator's most recent `log-action` entry
-   on the left, counters (`●N ○N ✓N ✗N`) + today's cost on the right.
+   on the left, counters (`●N ○N ✓N ✗N`) on the right.
 
 | Key | Action |
 |-----|--------|
@@ -180,7 +180,6 @@ orchestrator.sh [--project <path>] [--once] [--mock] [--max-retries N] \
 
 ```
 loop:
-  budget_check || { kill_switch; sleep 30; continue }
   task = db_claim()              # atomically claim head of queued
   if !task: sleep 5; continue
   worktree = worktree_create(task)
@@ -237,7 +236,6 @@ bash adapters/claude.sh
   "ok": true,
   "session_id": "uuid-...",
   "result": "natural language summary",     # for humans/debugging only; must not be used for control decisions
-  "cost_usd": 0.42,
   "num_turns": 7,
   "files_changed": 5,
   "error": null                              # filled with error brief when ok=false
@@ -274,11 +272,10 @@ bash entry points call via `harness-db <subcommand>` console script (see `src/ha
 db.init(schema_sql_path)                        # run schema/harness.sql + incremental migrations, idempotent
 db.claim(worker_id)                             # atomic UPDATE...RETURNING → (task_id, spec_path) or None
 db.transition(task_id, to_state, reason="")    # write tasks.status + transitions (BEGIN IMMEDIATE)
-db.log_call(task_id, worker_id, backend, sid, exit_code, cost, turns, duration_ms, files_changed)
+db.log_call(task_id, worker_id, backend, sid, exit_code, turns, duration_ms, files_changed)
 db.register_session(task_id, backend, session_id)
 db.session_touch(task_id, backend)              # refresh last_seen=now
 db.query_orphans(threshold_min, exclude_ids=[]) # list tasks stuck in transient states from crashes
-db.today_cost()                                 # today's cumulative USD (float)
 db.query_status(task_id=None)                   # task list
 db.event_write / event_query_pending / event_mark_delivered
 ```
@@ -380,7 +377,7 @@ Deployed to project `.claude/settings.json`:
 ### 7.3 `hooks/notification.sh` Contract
 
 - Input: `hooks/notification.sh <event_type> <task_id> <event_json_path>` (called fire-and-forget by `harness.notify.notify`).
-- Behavior: macOS desktop notification (osascript) + writes to `.harness/logs/notify.log`. All four event types (`needs_decision`, `task_completed`, `task_failed`, `budget_exceeded`) fire a desktop alert — `task_completed` is needed because the coordinator session can't self-wake; the desktop toast is what brings the user back to chat (then the coordinator pulls events on next message). `needs_decision` shows an interactive dialog that writes the user's answer to `inbox/<tid>.answer`; the others are non-blocking toasts.
+- Behavior: macOS desktop notification (osascript) + writes to `.harness/logs/notify.log`. All four event types (`needs_decision`, `task_completed`, `task_failed`, `task_blocked`) fire a desktop alert — `task_completed` is needed because the coordinator session can't self-wake; the desktop toast is what brings the user back to chat (then the coordinator pulls events on next message). `needs_decision` shows an interactive dialog that writes the user's answer to `inbox/<tid>.answer`; the others are non-blocking toasts.
 
 ---
 
@@ -391,7 +388,7 @@ Deployed to project `.claude/settings.json`:
 ```python
 from harness.notify import notify
 notify(event_type: str, task_id: Optional[str], payload: dict) -> int
-# event_type: needs_decision | task_completed | task_failed | budget_exceeded
+# event_type: needs_decision | task_completed | task_failed | task_blocked
 ```
 
 - Writes to `events` table + `.harness/events/<ts>-<event_type>-<task_id>.json`.
@@ -422,25 +419,9 @@ harness watchdog-tick            # run one cycle manually (debugging / verificat
 
 ---
 
-## 9. Cost Gate (M10)
+## 9. Project Initialization (M11)
 
-### 9.1 `src/harness/budget.py`
-
-```python
-from harness.budget import under_limit, today_cost, daily_limit
-under_limit() -> bool           # True = can still dispatch
-today_cost() -> float           # today's cumulative USD
-daily_limit() -> float          # read from ~/.config/harness/config, default 10
-```
-
-- Daily budget read from `~/.config/harness/config`; when exceeded, `notify budget_exceeded`.
-- Does not kill running workers (prevents lost work); only stops `db_claim` for new tasks.
-
----
-
-## 10. Project Initialization (M11)
-
-### 10.1 `bin/harness init` Steps
+### 9.1 `bin/harness init` Steps
 
 In order:
 
@@ -457,7 +438,7 @@ Idempotent: running again → only repairs missing items; does not overwrite man
 
 ---
 
-## 11. Cross-Module Trigger Diagram
+## 10. Cross-Module Trigger Diagram
 
 ```
 human/coordinator                  worker                       orchestrator

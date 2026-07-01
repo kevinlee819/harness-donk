@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 from typing import Iterator, Optional
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 """harness.db schema version. Bump on incompatible changes; see CLAUDE.md §8."""
 
 
@@ -356,7 +356,6 @@ def log_call(
     backend: str,
     session_id: Optional[str],
     exit_code: int,
-    cost_usd: Optional[float],
     num_turns: Optional[int],
     duration_ms: Optional[int],
     files_changed: int,
@@ -364,8 +363,8 @@ def log_call(
     with _connect() as c:
         c.execute(
             "INSERT INTO calls(ts, task_id, worker_id, backend, session_id, "
-            "exit_code, cost_usd, num_turns, duration_ms, files_changed) "
-            "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "exit_code, num_turns, duration_ms, files_changed) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 _now(),
                 task_id,
@@ -373,21 +372,11 @@ def log_call(
                 backend,
                 session_id,
                 exit_code,
-                cost_usd,
                 num_turns,
                 duration_ms,
                 files_changed,
             ),
         )
-
-
-def today_cost() -> float:
-    with _connect() as c:
-        row = c.execute(
-            "SELECT COALESCE(SUM(cost_usd), 0) FROM calls "
-            "WHERE ts >= datetime('now', 'start of day')"
-        ).fetchone()
-    return float(row[0])
 
 
 def query_status(task_id: Optional[str] = None) -> list[tuple]:
@@ -438,10 +427,9 @@ def event_write(
 ) -> int:
     """Append a row to events. Returns the new event id.
 
-    event_type ∈ {needs_decision, task_completed, task_failed, budget_exceeded}.
+    event_type ∈ {needs_decision, task_completed, task_failed, task_blocked}.
     """
-    allowed = {"needs_decision", "task_completed", "task_failed",
-               "task_blocked", "budget_exceeded"}
+    allowed = {"needs_decision", "task_completed", "task_failed", "task_blocked"}
     if event_type not in allowed:
         raise ValueError(f"event_type {event_type!r} not in {allowed}")
     with _connect() as c:
