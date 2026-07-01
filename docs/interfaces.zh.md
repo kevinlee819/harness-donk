@@ -54,6 +54,11 @@ harness watch                            # 交互式 TUI：任务列表 + worker
                                          # 详见 §1.2.1 键位
 harness activity                         # 协调者活动日志的滚动视图
                                          # 详见 §1.2.2；harness-infi 内 Alt-l 唤起 popup
+harness reset [--hard] [--dry-run] [-y]  # 还原项目到「未 harness init」状态
+                                         # 清 .harness/、.claude/、worktrees、harness/* 分支、
+                                         # tmux 会话、~/.claude/projects/<encoded-cwd>
+                                         # --hard 顺带 git-rm AGENTS.md + specs/、清 projects.list
+                                         # --dry-run 只预览不动手；-y / --yes 跳过确认
 harness backup                           # sqlite3 .backup → .harness/backups/harness-<ts>.db
                                          # 含保留策略（默 7 天，HARNESS_BACKUP_RETAIN_DAYS 可调）
 harness run-once [--mock] [--backend N] [--model M] [--max-retries N]
@@ -91,7 +96,11 @@ TUI 自己**不**直接写 `harness.db`。
 
 最低终端：60 × 8。低于此尺寸只显示提示，等待 `q`。
 
-**实时活动流（codex backend）**：详情 pane 会 tail worker 的流式事件文件 `.harness/workers/<wid>/codex.events.jsonl`（由 `adapters/codex.sh` 实时写入），把最近 ~6 条事件每行一条渲染出来——推理 (`💭`)、shell 调用 (`$`)、文件编辑 (`✏️`)、agent 输出 (`💬`)、turn 分隔 (`▸` / `✓`)。这就是「worker 现在到底在干啥」的直接信号，每秒刷新一次。claude backend 暂不支持（claude.sh 还没切到 stream-json）。
+**实时活动流**：详情 pane 会 tail worker 的流式事件文件，把最近 ~6 条事件每行一条渲染出来——推理 (`💭`)、shell/Bash (`$`)、文件编辑 (`✏️`)、文件读取 (`📖`)、grep/glob (`🔍`)、TodoWrite (`📝`)、其它工具 (`🔧`)、agent 输出 (`💬`)、turn 分隔 (`▸` / `✓`)。每秒刷新一次。
+
+按 backend 数据源：
+- **codex**：`.harness/workers/<wid>/codex.events.jsonl`（`adapters/codex.sh` 在 `codex exec --json` 运行期间实时写入）
+- **claude**：`.harness/workers/<wid>/claude.events.jsonl`（`adapters/claude.sh` 用 `--output-format stream-json --verbose` 时写入；review 模式仍走 plain `--output-format json`，一次性 review 不需要流式）
 
 ### 1.2.2 `harness activity` —— 协调者活动日志查看器
 

@@ -787,6 +787,156 @@ cmd_statusline() {
   exec "$HARNESS_PYTHON" -m harness.cli.statusline "$@"
 }
 
+cmd_reset() {
+  # Bring a project back to "never-onboarded" state. Three levels of aggression:
+  #   (default): remove local runtime state (.harness/, .claude/, worktrees,
+  #              harness/* branches, tmux session, Claude Code's per-project
+  #              conversation history in ~/.claude/projects/<encoded>).
+  #              Does NOT touch git-tracked scaffold (AGENTS.md, specs/, CLAUDE.md).
+  #   --hard: also removes the git-tracked scaffold (git rm AGENTS.md specs/;
+  #           remove CLAUDE.md symlink; drop project from ~/.config/harness/projects.list).
+  #   --dry-run: print what would be removed; touches nothing.
+  #
+  # Confirmation: prompts unless -y / --yes / stdin is not a tty. --dry-run
+  # always skips the prompt because it's non-destructive.
+  local hard=0 dryrun=0 yes=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --hard) hard=1; shift ;;
+      --dry-run|-n) dryrun=1; shift ;;
+      --yes|-y) yes=1; shift ;;
+      -h|--help)
+        cat <<HELP
+harness reset [--hard] [--dry-run] [--yes]
+
+Restore a project to pre-'harness init' state.
+
+Removes:
+  .harness/                                    project runtime state
+  .claude/                                     Claude Code project overrides
+  ~/.claude/projects/<encoded-cwd>/            Claude Code conversation history
+  <parent>/.worktrees/<project>/               worker worktrees
+  git branches harness/*                       worker branches
+  tmux session harness-<hash>                  running session, if any
+
+With --hard, also:
+  git rm AGENTS.md specs/  (+ commit "harness: reset")
+  rm CLAUDE.md             (typically a symlink)
+  drop project from ~/.config/harness/projects.list
+
+Use --dry-run to preview; use --yes to skip the confirmation prompt.
+HELP
+        return 0 ;;
+      *) echo "unknown arg: $1" >&2; return 1 ;;
+    esac
+  done
+
+  local cwd; cwd=$(pwd)
+  local parent; parent=$(dirname "$cwd")
+  local proj;   proj=$(basename "$cwd")
+  local hash;   hash=$(printf '%s' "$cwd" | shasum -a 256 | cut -c1-8)
+  local sess="harness-$hash"
+  local encoded_cwd; encoded_cwd=$(printf '%s' "$cwd" | sed 's|/|-|g')
+  local claude_proj="$HOME/.claude/projects/$encoded_cwd"
+  local worktrees="$parent/.worktrees/$proj"
+
+  # Collect harness/* branches (git may not exist / may be bare)
+  local branches=""
+  if git -C "$cwd" rev-parse --git-dir >/dev/null 2>&1; then
+    branches=$(git -C "$cwd" branch --format='%(refname:short)' 2>/dev/null \
+                 | grep '^harness/' || true)
+  fi
+
+  # Build a list of things to remove for both display + execution
+  local -a plan=()
+  [[ -d "$cwd/.harness" ]]    && plan+=(".harness/")
+  [[ -d "$cwd/.claude" ]]     && plan+=(".claude/")
+  [[ -d "$claude_proj" ]]     && plan+=("~/.claude/projects/$encoded_cwd/  (Claude Code chat history)")
+  [[ -d "$worktrees" ]]       && plan+=("$worktrees  (worker worktrees)")
+  [[ -n "$branches" ]]        && plan+=("git branches: $(tr '\n' ' ' <<< "$branches")")
+  if tmux has-session -t "$sess" 2>/dev/null; then
+    plan+=("tmux session: $sess")
+  fi
+  if (( hard )); then
+    [[ -f "$cwd/AGENTS.md" ]]                  && plan+=("AGENTS.md  (git rm)")
+    [[ -d "$cwd/specs" ]]                      && plan+=("specs/  (git rm)")
+    [[ -L "$cwd/CLAUDE.md" || -f "$cwd/CLAUDE.md" ]] && plan+=("CLAUDE.md  (symlink)")
+    if grep -qxF "$cwd" "$HOME/.config/harness/projects.list" 2>/dev/null; then
+      plan+=("entry in ~/.config/harness/projects.list")
+    fi
+  fi
+
+  if [[ ${#plan[@]} -eq 0 ]]; then
+    echo "nothing to reset — this project is already in a clean state"
+    return 0
+  fi
+
+  printf '\n🫏 harness reset (%s mode)\n' "$([[ $hard -eq 1 ]] && echo hard || echo default)"
+  printf '   project: %s\n\n' "$cwd"
+  printf 'Would remove:\n'
+  local item
+  for item in "${plan[@]}"; do
+    printf '  - %s\n' "$item"
+  done
+  echo
+
+  if (( dryrun )); then
+    echo "(dry-run — no changes made)"
+    return 0
+  fi
+
+  if (( ! yes )); then
+    if [[ ! -t 0 ]]; then
+      echo "refusing to reset without --yes when stdin is not a tty" >&2
+      return 1
+    fi
+    printf 'Type the project name (%s) to confirm: ' "$proj"
+    local answer
+    read -r answer
+    if [[ "$answer" != "$proj" ]]; then
+      echo "confirmation failed — nothing removed"
+      return 1
+    fi
+  fi
+
+  # ── execute ─────────────────────────────────────────
+  tmux kill-session -t "$sess" 2>/dev/null || true
+  [[ -d "$cwd/.harness" ]]   && rm -rf "$cwd/.harness"
+  [[ -d "$cwd/.claude" ]]    && rm -rf "$cwd/.claude"
+  [[ -d "$claude_proj" ]]    && rm -rf "$claude_proj"
+  [[ -d "$worktrees" ]]      && rm -rf "$worktrees"
+  # Prune stale .git/worktrees registrations left by the rm -rf above
+  git -C "$cwd" worktree prune 2>/dev/null || true
+  if [[ -n "$branches" ]]; then
+    printf '%s\n' "$branches" | xargs -r git -C "$cwd" branch -D 2>/dev/null || true
+  fi
+  if (( hard )); then
+    local rmed=0
+    if [[ -f "$cwd/AGENTS.md" ]]; then
+      git -C "$cwd" rm -f AGENTS.md 2>/dev/null || rm -f "$cwd/AGENTS.md"
+      rmed=1
+    fi
+    if [[ -d "$cwd/specs" ]]; then
+      git -C "$cwd" rm -rf specs 2>/dev/null || rm -rf "$cwd/specs"
+      rmed=1
+    fi
+    if [[ -L "$cwd/CLAUDE.md" || -f "$cwd/CLAUDE.md" ]]; then
+      rm -f "$cwd/CLAUDE.md"
+    fi
+    if (( rmed )) && ! git -C "$cwd" diff --cached --quiet 2>/dev/null; then
+      git -C "$cwd" -c commit.gpgsign=false commit -q -m "harness: reset" 2>/dev/null || true
+    fi
+    if [[ -f "$HOME/.config/harness/projects.list" ]]; then
+      # Use awk (portable, no in-place quirks between BSD/GNU sed)
+      awk -v c="$cwd" 'index($0,c)!=1{print}$0!=c && index($0,c)==1' \
+        "$HOME/.config/harness/projects.list" > "$HOME/.config/harness/projects.list.tmp" \
+        && mv "$HOME/.config/harness/projects.list.tmp" "$HOME/.config/harness/projects.list"
+    fi
+  fi
+
+  echo "✓ reset complete — run 'harness init' to start fresh"
+}
+
 cmd_restart_orchestrator() {
   # Restart the orchestrator pane in the harness tmux session.
   # Used by the coordinator when orchestrator_down is detected.
@@ -832,6 +982,8 @@ Commands:
                           --path 仅打印 worktree 路径，便于 cd "$(harness attach w1 --path)"
   watch                   交互式 TUI：任务列表 + worker 详情 + 协调者动作 (j/k 导航)
   activity                协调者活动日志覆盖 (.harness/logs/coordinator-activity.log)
+  reset [--hard]          还原为「未 harness init」状态（.harness/.claude/worktrees/tmux/git 分支）
+                          --hard 顺带 git rm AGENTS.md + specs/；--dry-run 只打印不动手
   restart-orchestrator    重启 orchestrator pane（仅在 orchestrator 真正挂掉时使用）
   upgrade                 拉最新源码 + uv sync + 重做符号链接（git pull --ff-only）
   statusline              Claude Code statusline 渲染器（接 stdin JSON，输出一行 ANSI）；
@@ -858,6 +1010,7 @@ case "$cmd" in
   watch-panel) cmd_watch_panel "$@" ;;
   watch) exec "$HARNESS_PYTHON" -m harness.cli.watch_tui "$@" ;;
   activity) exec "$HARNESS_PYTHON" -m harness.cli.activity_tui "$@" ;;
+  reset) cmd_reset "$@" ;;
   statusline) cmd_statusline "$@" ;;
   restart-orchestrator) cmd_restart_orchestrator "$@" ;;
   help|-h|--help|"") cmd_help ;;

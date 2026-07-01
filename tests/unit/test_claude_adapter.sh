@@ -129,6 +129,25 @@ test_default_args_do_not_use_review_flags() {
   done
 }
 
+test_write_mode_uses_stream_json_with_verbose() {
+  # Write mode streams so watch TUI can tail; --verbose is required by claude
+  # CLI when --output-format=stream-json is set (else it errors out).
+  local out; out=$(_dryrun_args)
+  assert_contains "stream-json" "$out" "write mode should stream"
+  assert_contains "--verbose" "$out" "stream-json requires --verbose"
+}
+
+test_review_mode_uses_plain_json_not_stream() {
+  # Reviews are one-shot — no need to stream, and stream mode would break the
+  # existing single-blob parsing on the response.
+  local out; out=$(_dryrun_args ADAPTER_SANDBOX=read-only)
+  if [[ "$out" == *"stream-json"* ]]; then
+    _assert_fail "review mode must not use stream-json"
+  fi
+  assert_contains "--output-format" "$out"
+  assert_contains "json" "$out"
+}
+
 test_review_mode_uses_json_schema() {
   local out; out=$(_dryrun_args ADAPTER_SANDBOX=read-only)
   assert_contains "--json-schema" "$out" "structured output enforced"

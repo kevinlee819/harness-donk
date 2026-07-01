@@ -54,6 +54,11 @@ harness watch                            # interactive TUI: task list + worker d
                                          # see §1.2.1 for keybindings
 harness activity                         # scrollable view of coordinator-activity.log
                                          # see §1.2.2; Alt-l opens it as popup inside harness-infi
+harness reset [--hard] [--dry-run] [-y]  # restore project to pre-'harness init' state
+                                         # removes .harness/, .claude/, worktrees, harness/* branches,
+                                         # tmux session, ~/.claude/projects/<encoded-cwd>
+                                         # --hard: also git-rm AGENTS.md + specs/ + drop from projects.list
+                                         # --dry-run: preview only; -y / --yes: skip confirmation
 harness backup                           # sqlite3 .backup → .harness/backups/harness-<ts>.db
                                          # includes retention policy (default 7 days, HARNESS_BACKUP_RETAIN_DAYS adjustable)
 harness run-once [--mock] [--backend N] [--model M] [--max-retries N]
@@ -92,13 +97,19 @@ truth. The TUI never writes to `harness.db` directly.
 
 Minimum terminal: 60 × 8. Below that it prints a message and waits for `q`.
 
-**Live activity feed (codex backend):** the detail pane tails the worker's
-streaming events file at `.harness/workers/<wid>/codex.events.jsonl` (written
-by `adapters/codex.sh` in real time) and renders the last ~6 events as one
-line each — reasoning (`💭`), shell calls (`$`), file edits (`✏️`), agent
-messages (`💬`), turn boundaries (`▸`/`✓`). This is what "the worker is
-actually doing right now" looks like, refreshed every 1s. Empty for claude
-backend until claude.sh learns to emit stream-json.
+**Live activity feed:** the detail pane tails the worker's streaming events
+file and renders the last ~6 events as one line each — reasoning (`💭`),
+shell/Bash (`$`), file edits (`✏️`), file reads (`📖`), grep/glob (`🔍`),
+todo writes (`📝`), other tools (`🔧`), agent messages (`💬`), turn
+boundaries (`▸`/`✓`). Refreshed every 1s.
+
+Source of truth per backend:
+- **codex**: `.harness/workers/<wid>/codex.events.jsonl` (adapters/codex.sh
+  streams `codex exec --json` events during the run)
+- **claude**: `.harness/workers/<wid>/claude.events.jsonl` (adapters/claude.sh
+  writes when running with `--output-format stream-json --verbose`; review mode
+  stays on plain `--output-format json` since one-shot reviews don't need
+  streaming)
 
 ### 1.2.2 `harness activity` — coordinator activity log viewer
 

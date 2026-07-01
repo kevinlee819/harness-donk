@@ -52,49 +52,57 @@ def _read_worker_activity(project: Path, worker_id: str,
                           limit: int = 8) -> tuple[list[str], Optional[float]]:
     """Return (last N human-readable activity lines, file_mtime_epoch).
 
-    Reads `.harness/workers/<wid>/codex.events.jsonl` (written by adapters/codex.sh)
-    and converts each codex JSONL event into a short summary. Returns ([], None)
-    when there's no activity file yet (no worker, claude backend, brand-new task).
+    Tries both known event files:
+      - `.harness/workers/<wid>/codex.events.jsonl`  (adapters/codex.sh)
+      - `.harness/workers/<wid>/claude.events.jsonl` (adapters/claude.sh stream mode)
+
+    Whichever exists is parsed with the matching renderer. Returns ([], None)
+    when neither file exists (no worker yet, brand-new task, dry-run tests).
 
     Defensive against partial writes (last line may be truncated): tolerated by
     json.loads + try/except per line.
     """
     if not worker_id:
         return [], None
-    f = project / ".harness" / "workers" / worker_id / "codex.events.jsonl"
-    if not f.is_file():
-        return [], None
-    try:
-        mtime = f.stat().st_mtime
-        # Read at most the last ~32KB. Codex JSONL lines are ≤2KB each in
-        # practice, so this gives us > 16 events of context.
-        size = f.stat().st_size
-        with open(f, "rb") as fh:
-            fh.seek(max(0, size - 32_768))
-            raw = fh.read().decode("utf-8", errors="replace")
-    except OSError:
-        return [], None
-    # Discard the first (possibly partial) line if we did the tail seek
-    lines = raw.splitlines()
-    if size > 32_768 and lines:
-        lines = lines[1:]
-    out: list[str] = []
-    for line in lines:
-        line = line.strip()
-        if not line:
+    wdir = project / ".harness" / "workers" / worker_id
+    candidates = [
+        (wdir / "codex.events.jsonl",  _render_codex_event),
+        (wdir / "claude.events.jsonl", _render_claude_event),
+    ]
+    for f, renderer in candidates:
+        if not f.is_file():
             continue
         try:
-            ev = json.loads(line)
-        except json.JSONDecodeError:
+            mtime = f.stat().st_mtime
+            # Read at most the last ~32KB. Codex JSONL lines are ≤2KB each in
+            # practice, so this gives us > 16 events of context.
+            size = f.stat().st_size
+            with open(f, "rb") as fh:
+                fh.seek(max(0, size - 32_768))
+                raw = fh.read().decode("utf-8", errors="replace")
+        except OSError:
             continue
-        rendered = _render_codex_event(ev)
-        if rendered:
-            out.append(rendered)
-    return out[-limit:], mtime
+        # Discard the first (possibly partial) line if we did the tail seek
+        lines = raw.splitlines()
+        if size > 32_768 and lines:
+            lines = lines[1:]
+        out: list[str] = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            for rendered in renderer(ev):
+                out.append(rendered)
+        return out[-limit:], mtime
+    return [], None
 
 
-def _render_codex_event(ev: dict) -> Optional[str]:
-    """Map a codex JSONL event to one human-readable line. Returns None to skip.
+def _render_codex_event(ev: dict) -> list[str]:
+    """Map a codex JSONL event to human-readable lines. Returns [] to skip.
 
     Event taxonomy (codex 0.142+):
       thread.started        — session bookkeeping; skipped (no signal for user)
@@ -110,34 +118,82 @@ def _render_codex_event(ev: dict) -> Optional[str]:
     item = ev.get("item") or {}
     it = item.get("type", "")
     if t == "turn.started":
-        return "▸ turn started"
+        return ["▸ turn started"]
     if t == "turn.completed":
         usage = ev.get("usage") or {}
         in_tok = usage.get("input_tokens", 0)
         out_tok = usage.get("output_tokens", 0)
-        return f"✓ turn done  ({in_tok} in, {out_tok} out tok)"
+        return [f"✓ turn done  ({in_tok} in, {out_tok} out tok)"]
     if t in ("item.started", "item.completed"):
-        # Prefer text from `.completed` (final) — `started` may have only the prompt
         if it == "agent_message":
             txt = (item.get("text") or "").strip()
-            if not txt:
-                return None
-            return f"💬 {txt[:80]}"
+            return [f"💬 {txt[:80]}"] if txt else []
         if it == "reasoning":
             txt = (item.get("text") or "").strip()
-            if not txt:
-                return None
-            return f"💭 {txt[:80]}"
+            return [f"💭 {txt[:80]}"] if txt else []
         if it in ("exec_command_call", "shell_call", "command"):
             cmd = (item.get("command") or item.get("cmd")
                    or item.get("args") or "?")
             if isinstance(cmd, list):
                 cmd = " ".join(str(x) for x in cmd)
-            return f"$ {str(cmd)[:80]}"
+            return [f"$ {str(cmd)[:80]}"]
         if it in ("file_change_call", "edit", "write"):
             path = item.get("path") or item.get("file") or "?"
-            return f"✏️  {path}"
-    return None
+            return [f"✏️  {path}"]
+    return []
+
+
+def _render_claude_event(ev: dict) -> list[str]:
+    """Map a claude-code stream-json event to human-readable lines.
+
+    Event taxonomy (Claude Code v2 `--output-format stream-json --verbose`):
+      type=system, subtype=init            session start — skipped
+      type=rate_limit_event                skipped
+      type=assistant, message.content=[…]  model output: iterate content array
+        content[i].type=text                   → 💬 <text>
+        content[i].type=tool_use, name=X       → prefix by tool:
+                                                   Bash → $, Read → 📖,
+                                                   Edit/Write → ✏️, others → 🔧
+        content[i].type=thinking               → 💭 <text>  (extended thinking)
+      type=user, message.content=[tool_result] echo — skipped
+      type=result                          final summary — skipped (we already have
+                                              turns/usage from the DB)
+    """
+    t = ev.get("type", "")
+    if t == "assistant":
+        msg = ev.get("message") or {}
+        lines: list[str] = []
+        for c in msg.get("content") or []:
+            ct = c.get("type", "")
+            if ct == "text":
+                txt = (c.get("text") or "").strip()
+                if txt:
+                    lines.append(f"💬 {txt[:80]}")
+            elif ct == "thinking":
+                txt = (c.get("thinking") or c.get("text") or "").strip()
+                if txt:
+                    lines.append(f"💭 {txt[:80]}")
+            elif ct == "tool_use":
+                name = c.get("name") or "?"
+                inp = c.get("input") or {}
+                if name == "Bash":
+                    cmd = str(inp.get("command", "?"))
+                    lines.append(f"$ {cmd[:80]}")
+                elif name in ("Edit", "Write", "NotebookEdit"):
+                    path = inp.get("file_path") or inp.get("path") or "?"
+                    lines.append(f"✏️  {path}")
+                elif name == "Read":
+                    path = inp.get("file_path") or inp.get("path") or "?"
+                    lines.append(f"📖 {path}")
+                elif name in ("Grep", "Glob"):
+                    pat = inp.get("pattern") or inp.get("path") or "?"
+                    lines.append(f"🔍 {name}: {str(pat)[:70]}")
+                elif name == "TodoWrite":
+                    lines.append("📝 TodoWrite")
+                else:
+                    lines.append(f"🔧 {name}")
+        return lines
+    return []
 
 
 def _spec_title(project: Path, task_id: str) -> str:
@@ -537,7 +593,8 @@ def _render_detail(stdscr, y0: int, y_max: int, tid: str, project: Path,
         age_str = ""
         if act_mtime is not None:
             age_str = "  ·  " + _age_human(max(0, time.time() - act_mtime)) + " ago"
-        header = f"Live activity (codex){age_str}"
+        backend_label = (status_json.get("backend") if status_json else None) or "worker"
+        header = f"Live activity ({backend_label}){age_str}"
         _addstr_clip(stdscr, cur_y, 2, header,
                      curses.color_pair(PAIRS["DIM"]))
         cur_y += 1

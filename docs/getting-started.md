@@ -176,7 +176,21 @@ After that, your eyes split between two zones in window 0: chat on the left, liv
 | `Alt-0` | jump back to main window |
 | `Alt-o` / `Alt-w` | orchestrator / watchdog windows |
 | `Alt-l` | open coordinator activity log as a popup overlay (`harness activity`) |
+| `Ctrl-B ←` / `Ctrl-B →` | (fallback, no config needed) focus left / right pane |
+| `Ctrl-B 0` / `Ctrl-B 1` / `Ctrl-B 2` | (fallback) main / orchestrator / watchdog window |
 | `Ctrl-B d` | detach (all windows keep running in the background) |
+
+**On macOS, `Alt-` keys need one-time terminal setup** — by default macOS terminals bind the Option key to insert special characters (é ® ∆ …) instead of sending as Meta/Alt. Enable "Option-as-Meta" once and the Alt bindings work everywhere:
+
+| Terminal | Setting |
+|----------|---------|
+| **iTerm2** | Settings → Profiles → Keys → General → **Left Option Key: Esc+** |
+| **Terminal.app** | Settings → Profiles → Keyboard → check **"Use Option as Meta key"** |
+| **Ghostty** | already Alt-mode by default; no config needed |
+| **WezTerm** | already Alt-mode by default; no config needed |
+| **Alacritty** | already Alt-mode by default; no config needed |
+
+Restart the terminal after changing the setting. If you skip this, the fallback `Ctrl-B <key>` bindings above still work — two keystrokes instead of one.
 
 Inside the right-pane TUI: `j/k` navigate tasks, `Enter` pin to detail, `r` retry, `R` force-retry (for orphans), `c` cancel, `?` help, `q` quit. See [interfaces.md §1.2.1](interfaces.md#121-harness-watch--interactive-tui) for the full keymap.
 
@@ -208,6 +222,7 @@ harness status                     # view current status of all tasks
 harness watch                      # interactive TUI: tasks + worker detail + coordinator activity
 harness activity                   # scrollable view of the coordinator's full action history
 harness attach <wid>               # view a snapshot of what a worker is currently doing
+harness reset [--hard]             # restore project to pre-init state (--dry-run to preview)
 harness events pending             # view pending notification events
 harness backup                     # backup SQLite database
 harness run-once [--mock]          # run one orchestrator cycle then exit (for manual debugging)

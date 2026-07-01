@@ -175,7 +175,21 @@ harness 不是一个 AI，是**一个把多个 AI 串起来用、并加上确定
 | `Alt-0` | 跳回 main 窗口 |
 | `Alt-o` / `Alt-w` | orchestrator / watchdog 窗口 |
 | `Alt-l` | 弹出协调者活动日志覆盖层（`harness activity`） |
+| `Ctrl-B ←` / `Ctrl-B →` | （零配置回落）聚焦左 / 右 pane |
+| `Ctrl-B 0` / `Ctrl-B 1` / `Ctrl-B 2` | （零配置回落）main / orchestrator / watchdog 窗口 |
 | `Ctrl-B d` | detach（三个窗口继续在后台跑） |
+
+**macOS 需要一次性配置终端**——默认情况下 macOS 终端把 Option 键用来插入特殊字符（é ® ∆ …），tmux 收不到 Alt。改一次「Option-as-Meta」之后 Alt 组合键就到处能用了：
+
+| 终端 | 设置路径 |
+|------|---------|
+| **iTerm2** | Settings → Profiles → Keys → General → **Left Option Key: Esc+** |
+| **Terminal.app** | Settings → Profiles → Keyboard → 勾选 **"Use Option as Meta key"** |
+| **Ghostty** | 默认已开 Alt 模式，无需配置 |
+| **WezTerm** | 默认已开 Alt 模式，无需配置 |
+| **Alacritty** | 默认已开 Alt 模式，无需配置 |
+
+改完**重启终端**。如果不想配置，上面的 `Ctrl-B <键>` 回落方案零配置就能用——两个按键而不是一个。
 
 右 pane TUI 里：`j/k` 选任务，`Enter` 钉到详情，`r` retry，`R` force-retry（孤儿用），`c` cancel，`?` 帮助，`q` 退出。完整键位见 [interfaces.zh.md §1.2.1](interfaces.zh.md#121-harness-watch--交互式-tui)。
 
@@ -207,6 +221,7 @@ harness status                     # 看所有任务的当前状态
 harness watch                      # 交互式 TUI：任务列表 + worker 详情 + 协调者动作
 harness activity                   # 滚动查看协调者历史动作（log-action 全量记录）
 harness attach <wid>               # 看某个 worker 当前在干嘛的快照
+harness reset [--hard]             # 还原项目到未 init 状态（--dry-run 预览）
 harness events pending             # 看待处理的通知事件
 harness backup                     # 备份 SQLite 数据库
 harness run-once [--mock]          # 跑一轮编排器后退出（手动调试用）

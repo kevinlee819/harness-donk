@@ -148,23 +148,23 @@ fi
   command -v claude >/dev/null 2>&1 || { echo "claude CLI not found" >&2; exit 1; }
 }
 
-_args=(--print --output-format json --max-turns "$ADAPTER_MAX_TURNS")
-
-# Review 模式（read-only + 非 resume）：白名单只读工具 + 强制 JSON schema +
-# 不持久化 session。tmp/claude-doc.md §"CLI flags":
-#   --tools "Read,Grep,Glob"       仅允许只读导航工具，禁 Edit/Write/Bash/Web*
-#   --json-schema <schema-string>  强制 final output 符合 schema（结构化输出，
-#                                  比让 model 在 markdown 里夹 JSON 块靠谱一档）
-#   --no-session-persistence       review 一次性用，不写盘也不可 resume
-#   bypassPermissions 不传：只读工具不会触发权限提示，不需要它
+# Write mode uses stream-json so the watch TUI can tail progress in real time;
+# review mode stays on plain --output-format json (one-shot, no need to stream).
+# Stream mode requires --verbose per Claude CLI's own error message.
 if [[ "$ADAPTER_SANDBOX" == "read-only" && -z "$ADAPTER_SESSION_ID" ]]; then
+  # Review 模式（read-only + 非 resume）：白名单只读工具 + 强制 JSON schema +
+  # 不持久化 session。见 tmp/claude-doc.md §"CLI flags".
+  _args=(--print --output-format json --max-turns "$ADAPTER_MAX_TURNS")
   _review_schema="${HARNESS_HOME:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/schema/json/review-response.schema.json"
   _args+=(--tools "Read,Grep,Glob" --no-session-persistence)
   [[ -f "$_review_schema" ]] && _args+=(--json-schema "$(cat "$_review_schema")")
+  _STREAM_MODE=0
 else
   # 写模式：hooks 兜底（PreToolUse 安全门），bypassPermissions 让非交互调用
   # 不被工具权限弹窗卡住（CLAUDE.md §4.7 "硬约束放 hooks 不放提示词"）
-  _args+=(--permission-mode bypassPermissions)
+  _args=(--print --output-format stream-json --verbose
+         --max-turns "$ADAPTER_MAX_TURNS" --permission-mode bypassPermissions)
+  _STREAM_MODE=1
 fi
 
 [[ -n "$ADAPTER_SESSION_ID" ]] && _args+=(--resume "$ADAPTER_SESSION_ID")
@@ -178,9 +178,25 @@ fi
 
 start_ms=$(python3 -c 'import time;print(int(time.time()*1000))')
 
+# In stream mode we redirect stdout to the worker's events file so the watch
+# TUI can tail it live; then extract the terminal `type=result` event as our
+# canonical response for the rest of the parsing logic (unchanged).
+# Non-stream (review) mode captures stdout into RESP directly, as before.
 set +e
-RESP=$(timeout "$ADAPTER_TIMEOUT" claude "${_args[@]}" < "$ADAPTER_TASK_FILE" 2>"$ADAPTER_WORKTREE/.adapter.stderr")
-EXIT=$?
+if [[ "${_STREAM_MODE:-0}" == "1" && -n "$ADAPTER_WORKER_DIR" ]]; then
+  mkdir -p "$ADAPTER_WORKER_DIR"
+  _events_file="$ADAPTER_WORKER_DIR/claude.events.jsonl"
+  : > "$_events_file"   # truncate stale data from a prior attempt
+  timeout "$ADAPTER_TIMEOUT" claude "${_args[@]}" < "$ADAPTER_TASK_FILE" \
+    > "$_events_file" 2>"$ADAPTER_WORKTREE/.adapter.stderr"
+  EXIT=$?
+  # The `result` event carries session_id / result / num_turns / usage; that's
+  # what the parser below expects as a single JSON object.
+  RESP=$(jq -c 'select(.type == "result")' "$_events_file" 2>/dev/null | tail -1)
+else
+  RESP=$(timeout "$ADAPTER_TIMEOUT" claude "${_args[@]}" < "$ADAPTER_TASK_FILE" 2>"$ADAPTER_WORKTREE/.adapter.stderr")
+  EXIT=$?
+fi
 set -e
 
 end_ms=$(python3 -c 'import time;print(int(time.time()*1000))')
